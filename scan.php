@@ -1487,7 +1487,6 @@ class WordPressMalwareScanner {
         $this->log("This may take a moment...\n", 'info');
         
         // Use PHP's native functions for safer execution
-        $success = true;
         $errorCount = 0;
         
         try {
@@ -1500,6 +1499,12 @@ class WordPressMalwareScanner {
             
             $uid = $userInfo['uid'];
             $gid = $userInfo['gid'];
+            
+            // Change ownership of root directory first
+            if (!@chown($wpPath, $uid) || !@chgrp($wpPath, $gid)) {
+                $errorCount++;
+                $this->log("  Warning: Could not change ownership of root directory", 'warning');
+            }
             
             // Recursively change ownership using PHP's native function
             $iterator = new RecursiveIteratorIterator(
@@ -1515,12 +1520,6 @@ class WordPressMalwareScanner {
                         $this->log("  Warning: Could not change ownership of: " . $itemPath, 'warning');
                     }
                 }
-            }
-            
-            // Also change the root directory itself
-            if (!@chown($wpPath, $uid) || !@chgrp($wpPath, $gid)) {
-                $errorCount++;
-                $this->log("  Warning: Could not change ownership of root directory", 'warning');
             }
             
         } catch (Exception $e) {
@@ -1574,6 +1573,14 @@ class WordPressMalwareScanner {
         $errorCount = 0;
         
         try {
+            // Set the root directory to 755 first
+            if (@chmod($wpPath, 0755)) {
+                $dirCount++;
+            } else {
+                $errorCount++;
+                $this->log("  Warning: Could not change permissions of root directory", 'warning');
+            }
+            
             // Recursively change permissions using PHP's native function
             $iterator = new RecursiveIteratorIterator(
                 new RecursiveDirectoryIterator($wpPath, RecursiveDirectoryIterator::SKIP_DOTS),
@@ -1602,14 +1609,6 @@ class WordPressMalwareScanner {
                         }
                     }
                 }
-            }
-            
-            // Also set the root directory itself to 755
-            if (@chmod($wpPath, 0755)) {
-                $dirCount++;
-            } else {
-                $errorCount++;
-                $this->log("  Warning: Could not change permissions of root directory", 'warning');
             }
             
         } catch (Exception $e) {
