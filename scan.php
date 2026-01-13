@@ -327,6 +327,12 @@ class WordPressMalwareScanner {
                 case '--restore-permissions':
                     $options['mode'] = 'restore-permissions';
                     break;
+                case '--restore-ownership-all':
+                    $options['mode'] = 'restore-ownership-all';
+                    break;
+                case '--restore-permissions-all':
+                    $options['mode'] = 'restore-permissions-all';
+                    break;
             }
         }
         
@@ -1676,6 +1682,114 @@ class WordPressMalwareScanner {
     }
     
     /**
+     * Restore ownership for all detected websites
+     */
+    public function restoreOwnershipAll($cacheFile = 'cached.json') {
+        $cache = $this->loadCache($cacheFile);
+        if (!$cache || empty($cache['installations'])) {
+            $this->log("❌ Error: No installations found in cache", 'error');
+            return false;
+        }
+        
+        $installations = $cache['installations'];
+        $totalWebsites = count($installations);
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Restoring Ownership - All Websites ===", 'success');
+        $this->log("Total websites to process: {$totalWebsites}", 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        $successCount = 0;
+        $failureCount = 0;
+        $skippedCount = 0;
+        
+        foreach ($installations as $index => $installation) {
+            $num = $index + 1;
+            $domain = $installation['domain'];
+            $wpPath = $installation['path'];
+            
+            $this->log("\n[{$num}/{$totalWebsites}] Processing: {$domain}", 'info');
+            $this->log(str_repeat("-", 60), 'info');
+            
+            // Check if path is under /home/xxx/
+            if (!$this->isUnderHomePath($wpPath)) {
+                $this->log("  ⏭️  SKIPPED - Not under /home/xxx/ path", 'warning');
+                $skippedCount++;
+                continue;
+            }
+            
+            if ($this->restoreOwnership($domain, $cacheFile)) {
+                $successCount++;
+            } else {
+                $failureCount++;
+            }
+        }
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Bulk Restore Ownership Summary ===", 'success');
+        $this->log("✅ Successfully processed: {$successCount} website(s)", 'success');
+        $this->log("⏭️  Skipped (not /home/ path): {$skippedCount} website(s)", 'info');
+        $this->log("❌ Failed: {$failureCount} website(s)", $failureCount > 0 ? 'error' : 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        return $failureCount === 0;
+    }
+    
+    /**
+     * Restore permissions for all detected websites
+     */
+    public function restorePermissionsAll($cacheFile = 'cached.json') {
+        $cache = $this->loadCache($cacheFile);
+        if (!$cache || empty($cache['installations'])) {
+            $this->log("❌ Error: No installations found in cache", 'error');
+            return false;
+        }
+        
+        $installations = $cache['installations'];
+        $totalWebsites = count($installations);
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Restoring Permissions - All Websites ===", 'success');
+        $this->log("Total websites to process: {$totalWebsites}", 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        $successCount = 0;
+        $failureCount = 0;
+        $skippedCount = 0;
+        
+        foreach ($installations as $index => $installation) {
+            $num = $index + 1;
+            $domain = $installation['domain'];
+            $wpPath = $installation['path'];
+            
+            $this->log("\n[{$num}/{$totalWebsites}] Processing: {$domain}", 'info');
+            $this->log(str_repeat("-", 60), 'info');
+            
+            // Check if path is under /home/xxx/
+            if (!$this->isUnderHomePath($wpPath)) {
+                $this->log("  ⏭️  SKIPPED - Not under /home/xxx/ path", 'warning');
+                $skippedCount++;
+                continue;
+            }
+            
+            if ($this->restorePermissions($domain, $cacheFile)) {
+                $successCount++;
+            } else {
+                $failureCount++;
+            }
+        }
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Bulk Restore Permissions Summary ===", 'success');
+        $this->log("✅ Successfully processed: {$successCount} website(s)", 'success');
+        $this->log("⏭️  Skipped (not /home/ path): {$skippedCount} website(s)", 'info');
+        $this->log("❌ Failed: {$failureCount} website(s)", $failureCount > 0 ? 'error' : 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        return $failureCount === 0;
+    }
+    
+    /**
      * Update cache with disabled items information
      */
     private function updateCacheWithDisabledItems($installation, $disabledItems, $cacheFile) {
@@ -2797,6 +2911,12 @@ Usage:
   # Restore permissions (for /home/xxx/ paths only)
   php scan.php --restore-permissions --website example.com
   
+  # Restore ownership for all detected websites (bulk)
+  php scan.php --restore-ownership-all
+  
+  # Restore permissions for all detected websites (bulk)
+  php scan.php --restore-permissions-all
+  
   # Force reinstall even if versions match
   php scan.php --reinstall-plugins --website example.com --force
   
@@ -2827,6 +2947,8 @@ Options:
   --restore-disabled            Restore disabled items for specific website
   --restore-ownership           Restore ownership to user from /home/xxx/ path
   --restore-permissions         Restore permissions (755 for dirs, 644 for files)
+  --restore-ownership-all       Bulk restore ownership for all websites
+  --restore-permissions-all     Bulk restore permissions for all websites
   --report <file>               JSON report file to use for operations
   --cached <file>               Cache file path (default: cached.json)
   --website <domain>            Website domain or identifier
@@ -2896,6 +3018,12 @@ Examples:
   
   # Restore permissions for /home/forge/website.com
   php scan.php --restore-permissions --website example.com
+  
+  # Bulk restore ownership for all websites under /home/
+  php scan.php --restore-ownership-all
+  
+  # Bulk restore permissions for all websites under /home/
+  php scan.php --restore-permissions-all
   
   # Reinstall specific plugin
   php scan.php --reinstall-plugin jetpack --website example.com
@@ -3224,6 +3352,14 @@ switch ($options['mode']) {
             $options['website'], 
             $options['cached']
         );
+        break;
+        
+    case 'restore-ownership-all':
+        $scanner->restoreOwnershipAll($options['cached']);
+        break;
+        
+    case 'restore-permissions-all':
+        $scanner->restorePermissionsAll($options['cached']);
         break;
         
     default:

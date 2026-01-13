@@ -301,6 +301,10 @@ php scan.php --restore-disabled --website example.com
 - `--restore-ownership` - Restore ownership to user extracted from /home/xxx/ path
 - `--restore-permissions` - Restore standard permissions (755 for directories, 644 for files)
 
+### Bulk Ownership and Permission Management (no `--website` required, only for /home/xxx/ paths)
+- `--restore-ownership-all` - Bulk restore ownership for all detected websites
+- `--restore-permissions-all` - Bulk restore permissions for all detected websites
+
 ### Options
 - `--path <path>` - Path to scan for WordPress installations
 - `--report <file>` - JSON report file to use (default: `scan_report.json`)
@@ -356,6 +360,30 @@ sudo php scan.php --restore-permissions --website example.com
 sudo php scan.php --restore-ownership --website example.com
 sudo php scan.php --restore-permissions --website example.com
 ```
+
+### Bulk Operations
+
+For environments with multiple websites under `/home/xxx/` paths, use bulk commands to process all detected websites at once:
+
+```bash
+# Restore ownership for all websites
+sudo php scan.php --restore-ownership-all
+
+# Restore permissions for all websites
+sudo php scan.php --restore-permissions-all
+
+# Complete bulk workflow
+php scan.php --detect --path /home
+php scan.php --dry
+sudo php scan.php --restore-ownership-all
+sudo php scan.php --restore-permissions-all
+```
+
+**Bulk operation features:**
+- Automatically processes all detected websites from cache
+- Skips websites not under `/home/xxx/` paths with clear logging
+- Reports success/failure/skipped counts
+- Only requires sudo privileges once for all websites
 
 ### Requirements and Limitations
 
