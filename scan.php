@@ -1486,33 +1486,60 @@ class WordPressMalwareScanner {
         $this->log("Restoring ownership to: {$username}:{$username}", 'info');
         $this->log("This may take a moment...\n", 'info');
         
-        // Execute chown command
-        $command = sprintf(
-            'chown -R %s:%s %s 2>&1',
-            escapeshellarg($username),
-            escapeshellarg($username),
-            escapeshellarg($wpPath)
-        );
+        // Use PHP's native functions for safer execution
+        $success = true;
+        $errorCount = 0;
         
-        exec($command, $output, $returnCode);
-        
-        if ($returnCode === 0) {
-            $this->log("\n✅ SUCCESS: Ownership restored to {$username}:{$username}", 'success');
-            $this->log("All files and directories under {$wpPath} now belong to {$username}", 'success');
-            $this->log(str_repeat("=", 80) . "\n", 'info');
-            return true;
-        } else {
-            $this->log("\n❌ FAILED: Could not restore ownership", 'error');
-            if (!empty($output)) {
-                $this->log("Error output:", 'error');
-                foreach ($output as $line) {
-                    $this->log("  " . $line, 'error');
+        try {
+            // Get user and group IDs
+            $userInfo = posix_getpwnam($username);
+            if ($userInfo === false) {
+                $this->log("\n❌ FAILED: Could not get user information for '{$username}'", 'error');
+                return false;
+            }
+            
+            $uid = $userInfo['uid'];
+            $gid = $userInfo['gid'];
+            
+            // Recursively change ownership using PHP's native function
+            $iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($wpPath, RecursiveDirectoryIterator::SKIP_DOTS),
+                RecursiveIteratorIterator::SELF_FIRST
+            );
+            
+            foreach ($iterator as $item) {
+                $itemPath = $item->getPathname();
+                if (!@chown($itemPath, $uid) || !@chgrp($itemPath, $gid)) {
+                    $errorCount++;
+                    if ($errorCount <= 5) {  // Only show first 5 errors
+                        $this->log("  Warning: Could not change ownership of: " . $itemPath, 'warning');
+                    }
                 }
             }
-            $this->log("\nNote: This command requires sufficient permissions (may need sudo)", 'warning');
+            
+            // Also change the root directory itself
+            if (!@chown($wpPath, $uid) || !@chgrp($wpPath, $gid)) {
+                $errorCount++;
+                $this->log("  Warning: Could not change ownership of root directory", 'warning');
+            }
+            
+        } catch (Exception $e) {
+            $this->log("\n❌ FAILED: " . $e->getMessage(), 'error');
+            return false;
+        }
+        
+        if ($errorCount > 0) {
+            $this->log("\n⚠️  PARTIAL SUCCESS: Ownership restored with {$errorCount} error(s)", 'warning');
+            $this->log("Some files or directories could not be changed (insufficient permissions?)", 'warning');
+            $this->log("\nNote: This command may require sudo/root privileges for full success", 'warning');
             $this->log(str_repeat("=", 80) . "\n", 'info');
             return false;
         }
+        
+        $this->log("\n✅ SUCCESS: Ownership restored to {$username}:{$username}", 'success');
+        $this->log("All files and directories under {$wpPath} now belong to {$username}", 'success');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        return true;
     }
     
     /**
@@ -1541,49 +1568,69 @@ class WordPressMalwareScanner {
         $this->log("Setting file permissions to: 644", 'info');
         $this->log("This may take a moment...\n", 'info');
         
-        // Set directory permissions to 755
-        $dirCommand = sprintf(
-            'find %s -type d -exec chmod 755 {} + 2>&1',
-            escapeshellarg($wpPath)
-        );
+        // Use PHP's native functions for safer execution
+        $dirCount = 0;
+        $fileCount = 0;
+        $errorCount = 0;
         
-        exec($dirCommand, $dirOutput, $dirReturnCode);
-        
-        // Set file permissions to 644
-        $fileCommand = sprintf(
-            'find %s -type f -exec chmod 644 {} + 2>&1',
-            escapeshellarg($wpPath)
-        );
-        
-        exec($fileCommand, $fileOutput, $fileReturnCode);
-        
-        if ($dirReturnCode === 0 && $fileReturnCode === 0) {
-            $this->log("\n✅ SUCCESS: Permissions restored", 'success');
-            $this->log("All directories set to 755", 'success');
-            $this->log("All files set to 644", 'success');
-            $this->log(str_repeat("=", 80) . "\n", 'info');
-            return true;
-        } else {
-            $this->log("\n❌ FAILED: Could not restore permissions", 'error');
+        try {
+            // Recursively change permissions using PHP's native function
+            $iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($wpPath, RecursiveDirectoryIterator::SKIP_DOTS),
+                RecursiveIteratorIterator::SELF_FIRST
+            );
             
-            if ($dirReturnCode !== 0 && !empty($dirOutput)) {
-                $this->log("Directory permission errors:", 'error');
-                foreach ($dirOutput as $line) {
-                    $this->log("  " . $line, 'error');
+            foreach ($iterator as $item) {
+                $itemPath = $item->getPathname();
+                
+                if ($item->isDir()) {
+                    if (@chmod($itemPath, 0755)) {
+                        $dirCount++;
+                    } else {
+                        $errorCount++;
+                        if ($errorCount <= 5) {  // Only show first 5 errors
+                            $this->log("  Warning: Could not change permissions of directory: " . $itemPath, 'warning');
+                        }
+                    }
+                } else {
+                    if (@chmod($itemPath, 0644)) {
+                        $fileCount++;
+                    } else {
+                        $errorCount++;
+                        if ($errorCount <= 5) {  // Only show first 5 errors
+                            $this->log("  Warning: Could not change permissions of file: " . $itemPath, 'warning');
+                        }
+                    }
                 }
             }
             
-            if ($fileReturnCode !== 0 && !empty($fileOutput)) {
-                $this->log("File permission errors:", 'error');
-                foreach ($fileOutput as $line) {
-                    $this->log("  " . $line, 'error');
-                }
+            // Also set the root directory itself to 755
+            if (@chmod($wpPath, 0755)) {
+                $dirCount++;
+            } else {
+                $errorCount++;
+                $this->log("  Warning: Could not change permissions of root directory", 'warning');
             }
             
-            $this->log("\nNote: This command requires sufficient permissions (may need sudo)", 'warning');
+        } catch (Exception $e) {
+            $this->log("\n❌ FAILED: " . $e->getMessage(), 'error');
+            return false;
+        }
+        
+        if ($errorCount > 0) {
+            $this->log("\n⚠️  PARTIAL SUCCESS: Permissions restored with {$errorCount} error(s)", 'warning');
+            $this->log("Processed {$dirCount} directories and {$fileCount} files successfully", 'info');
+            $this->log("Some files or directories could not be changed (insufficient permissions?)", 'warning');
+            $this->log("\nNote: This command may require sudo/root privileges for full success", 'warning');
             $this->log(str_repeat("=", 80) . "\n", 'info');
             return false;
         }
+        
+        $this->log("\n✅ SUCCESS: Permissions restored", 'success');
+        $this->log("All directories set to 755 ({$dirCount} directories)", 'success');
+        $this->log("All files set to 644 ({$fileCount} files)", 'success');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        return true;
     }
     
     /**
@@ -1596,7 +1643,8 @@ class WordPressMalwareScanner {
         }
         
         // Check if path starts with /home/ and has at least one subdirectory
-        return preg_match('#^/home/[^/]+/#', $realPath) === 1;
+        // Matches /home/username or /home/username/...
+        return preg_match('#^/home/[^/]+(/|$)#', $realPath) === 1;
     }
     
     /**
@@ -1608,8 +1656,8 @@ class WordPressMalwareScanner {
             return null;
         }
         
-        // Extract username from /home/username/...
-        if (preg_match('#^/home/([^/]+)/#', $realPath, $matches)) {
+        // Extract username from /home/username or /home/username/...
+        if (preg_match('#^/home/([^/]+)(/|$)#', $realPath, $matches)) {
             return $matches[1];
         }
         
