@@ -161,6 +161,7 @@ class WordPressMalwareScanner {
             'only_infected' => false,
             'action' => null,
             'severity' => null,
+            'no_backup' => false,
         ];
         
         for ($i = 1; $i < count($argv); $i++) {
@@ -244,6 +245,30 @@ class WordPressMalwareScanner {
                     break;
                 case '--reinstall-all':
                     $options['mode'] = 'reinstall-all';
+                    break;
+                case '--reinstall-all-websites':
+                    $options['mode'] = 'reinstall-all-websites';
+                    break;
+                case '--disable-premium-plugins':
+                    $options['mode'] = 'disable-premium-plugins';
+                    break;
+                case '--disable-premium-themes':
+                    $options['mode'] = 'disable-premium-themes';
+                    break;
+                case '--disable-all-premium':
+                    $options['mode'] = 'disable-all-premium';
+                    break;
+                case '--disable-premium-plugins-all':
+                    $options['mode'] = 'disable-premium-plugins-all';
+                    break;
+                case '--disable-premium-themes-all':
+                    $options['mode'] = 'disable-premium-themes-all';
+                    break;
+                case '--disable-all-premium-all':
+                    $options['mode'] = 'disable-all-premium-all';
+                    break;
+                case '--restore-disabled':
+                    $options['mode'] = 'restore-disabled';
                     break;
                 case '--path':
                     if (isset($argv[$i + 1])) {
@@ -920,6 +945,82 @@ class WordPressMalwareScanner {
     }
     
     /**
+     * Reinstall all websites (bulk operation)
+     */
+    public function reinstallAllWebsites($cacheFile = 'cached.json', $wpVersion = null, $force = false, $noBackup = false) {
+        // Load cache
+        if (!file_exists($cacheFile)) {
+            $this->log("❌ Error: Cache file not found: {$cacheFile}", 'error');
+            $this->log("Run detection first: php scan.php --detect --path /path/to/scan", 'info');
+            return false;
+        }
+        
+        $cache = json_decode(file_get_contents($cacheFile), true);
+        
+        if (empty($cache['installations'])) {
+            $this->log("No WordPress installations found in cache.", 'warning');
+            return false;
+        }
+        
+        $installations = $cache['installations'];
+        $totalWebsites = count($installations);
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Bulk Reinstallation - All Websites ===", 'success');
+        $this->log(str_repeat("=", 80), 'info');
+        $this->log("Total websites to process: {$totalWebsites}\n", 'info');
+        
+        $startTime = microtime(true);
+        $successCount = 0;
+        $failureCount = 0;
+        $failedWebsites = [];
+        
+        foreach ($installations as $index => $installation) {
+            $num = $index + 1;
+            $domain = $installation['domain'];
+            
+            $this->log("\n[{$num}/{$totalWebsites}] Processing: {$domain}", 'info');
+            $this->log(str_repeat("-", 80), 'info');
+            
+            // Perform reinstallation
+            $result = $this->reinstallAll($domain, $cacheFile, $wpVersion, $force, $noBackup);
+            
+            if ($result) {
+                $successCount++;
+                $this->log("✅ Successfully processed: {$domain}", 'success');
+            } else {
+                $failureCount++;
+                $failedWebsites[] = $domain;
+                $this->log("❌ Failed to process: {$domain}", 'error');
+            }
+        }
+        
+        $duration = round(microtime(true) - $startTime);
+        $minutes = floor($duration / 60);
+        $seconds = $duration % 60;
+        $timeStr = $minutes > 0 ? "{$minutes}m {$seconds}s" : "{$seconds}s";
+        
+        // Display summary
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Bulk Reinstallation Summary ===", 'success');
+        $this->log(str_repeat("=", 80), 'info');
+        $this->log("✅ Successfully processed: {$successCount} website(s)", 'success');
+        $this->log("❌ Failed: {$failureCount} website(s)", $failureCount > 0 ? 'error' : 'success');
+        $this->log("⏱️  Total time: {$timeStr}", 'info');
+        
+        if (!empty($failedWebsites)) {
+            $this->log("\nFailed websites:", 'error');
+            foreach ($failedWebsites as $failed) {
+                $this->log("  - {$failed}", 'error');
+            }
+        }
+        
+        $this->log("\n" . str_repeat("=", 80) . "\n", 'info');
+        
+        return $failureCount === 0;
+    }
+    
+    /**
      * Helper to get installation or fail with error
      */
     private function getInstallationOrFail($website, $cacheFile) {
@@ -944,6 +1045,450 @@ class WordPressMalwareScanner {
         }
         
         return $installation;
+    }
+    
+    /**
+     * Disable premium plugins for a specific website
+     */
+    public function disablePremiumPlugins($website, $cacheFile = 'cached.json', $noBackup = false) {
+        $installation = $this->getInstallationOrFail($website, $cacheFile);
+        if (!$installation) return false;
+        
+        $plugins = $installation['plugins'];
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Disabling Premium Plugins ===", 'success');
+        $this->log("Website: {$installation['domain']}", 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        $stats = ['disabled' => 0, 'skipped' => 0, 'failed' => 0];
+        $disabledItems = [];
+        
+        foreach ($plugins as $plugin) {
+            $this->log("\n[{$plugin['name']}] Checking...", 'info');
+            
+            // Check if available on WordPress.org
+            $pluginInfo = $this->isPluginAvailableOnWordPress($plugin['name']);
+            
+            if ($pluginInfo) {
+                $this->log("  ⏭️  FREE PLUGIN - Skipping", 'info');
+                $stats['skipped']++;
+                continue;
+            }
+            
+            // This is a premium plugin - disable it
+            $this->log("  🔒 PREMIUM - Disabling...", 'warning');
+            
+            if (!is_dir($plugin['path'])) {
+                $this->log("  ❌ FAILED - Directory not found", 'error');
+                $stats['failed']++;
+                continue;
+            }
+            
+            // Create backup if requested
+            $backupPath = null;
+            if (!$noBackup) {
+                $backupPath = $plugin['path'] . '.backup-' . date('YmdHis');
+                $this->log("  📦 Creating backup...", 'info');
+                $this->recursiveCopy($plugin['path'], $backupPath);
+            }
+            
+            // Rename to disable
+            $disabledPath = $plugin['path'] . '.disabled';
+            
+            if (rename($plugin['path'], $disabledPath)) {
+                $this->log("  ✅ DISABLED - Renamed to: {$plugin['name']}.disabled", 'success');
+                if (!$noBackup) {
+                    $this->log("  📦 Backup created: {$plugin['name']}.backup-" . date('YmdHis'), 'info');
+                }
+                
+                $stats['disabled']++;
+                $disabledItems[] = [
+                    'type' => 'plugin',
+                    'name' => $plugin['name'],
+                    'original_path' => $plugin['path'],
+                    'disabled_path' => $disabledPath,
+                    'disabled_at' => time(),
+                    'backup_path' => !$noBackup ? $backupPath : null,
+                ];
+            } else {
+                $this->log("  ❌ FAILED - Could not rename directory", 'error');
+                $stats['failed']++;
+            }
+        }
+        
+        // Update cache with disabled items
+        if (!empty($disabledItems)) {
+            $this->updateCacheWithDisabledItems($installation, $disabledItems, $cacheFile);
+        }
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Disable Summary ===", 'success');
+        $this->log("✅ Disabled: {$stats['disabled']} premium plugin(s)", 'success');
+        $this->log("⏭️  Skipped: {$stats['skipped']} free plugin(s)", 'info');
+        $this->log("❌ Failed: {$stats['failed']} plugin(s)", $stats['failed'] > 0 ? 'error' : 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        return true;
+    }
+    
+    /**
+     * Disable premium themes for a specific website
+     */
+    public function disablePremiumThemes($website, $cacheFile = 'cached.json', $noBackup = false) {
+        $installation = $this->getInstallationOrFail($website, $cacheFile);
+        if (!$installation) return false;
+        
+        $themes = $installation['themes'];
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Disabling Premium Themes ===", 'success');
+        $this->log("Website: {$installation['domain']}", 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        $stats = ['disabled' => 0, 'skipped' => 0, 'failed' => 0];
+        $disabledItems = [];
+        
+        foreach ($themes as $theme) {
+            $this->log("\n[{$theme['name']}] Checking...", 'info');
+            
+            // Check if available on WordPress.org
+            $themeInfo = $this->isThemeAvailableOnWordPress($theme['name']);
+            
+            if ($themeInfo) {
+                $this->log("  ⏭️  FREE THEME - Skipping", 'info');
+                $stats['skipped']++;
+                continue;
+            }
+            
+            // This is a premium theme - disable it
+            $this->log("  🔒 PREMIUM - Disabling...", 'warning');
+            
+            if (!is_dir($theme['path'])) {
+                $this->log("  ❌ FAILED - Directory not found", 'error');
+                $stats['failed']++;
+                continue;
+            }
+            
+            // Create backup if requested
+            $backupPath = null;
+            if (!$noBackup) {
+                $backupPath = $theme['path'] . '.backup-' . date('YmdHis');
+                $this->log("  📦 Creating backup...", 'info');
+                $this->recursiveCopy($theme['path'], $backupPath);
+            }
+            
+            // Rename to disable
+            $disabledPath = $theme['path'] . '.disabled';
+            
+            if (rename($theme['path'], $disabledPath)) {
+                $this->log("  ✅ DISABLED - Renamed to: {$theme['name']}.disabled", 'success');
+                if (!$noBackup) {
+                    $this->log("  📦 Backup created: {$theme['name']}.backup-" . date('YmdHis'), 'info');
+                }
+                
+                $stats['disabled']++;
+                $disabledItems[] = [
+                    'type' => 'theme',
+                    'name' => $theme['name'],
+                    'original_path' => $theme['path'],
+                    'disabled_path' => $disabledPath,
+                    'disabled_at' => time(),
+                    'backup_path' => !$noBackup ? $backupPath : null,
+                ];
+            } else {
+                $this->log("  ❌ FAILED - Could not rename directory", 'error');
+                $stats['failed']++;
+            }
+        }
+        
+        // Update cache with disabled items
+        if (!empty($disabledItems)) {
+            $this->updateCacheWithDisabledItems($installation, $disabledItems, $cacheFile);
+        }
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Disable Summary ===", 'success');
+        $this->log("✅ Disabled: {$stats['disabled']} premium theme(s)", 'success');
+        $this->log("⏭️  Skipped: {$stats['skipped']} free theme(s)", 'info');
+        $this->log("❌ Failed: {$stats['failed']} theme(s)", $stats['failed'] > 0 ? 'error' : 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        return true;
+    }
+    
+    /**
+     * Disable all premium plugins and themes for a specific website
+     */
+    public function disableAllPremium($website, $cacheFile = 'cached.json', $noBackup = false) {
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Disabling All Premium Plugins & Themes ===", 'success');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        // Disable premium plugins
+        $this->log("--- Step 1: Disabling Premium Plugins ---", 'info');
+        $this->disablePremiumPlugins($website, $cacheFile, $noBackup);
+        
+        // Disable premium themes
+        $this->log("\n--- Step 2: Disabling Premium Themes ---", 'info');
+        $this->disablePremiumThemes($website, $cacheFile, $noBackup);
+        
+        $this->log("\n=== All Premium Items Disabled ===", 'success');
+        return true;
+    }
+    
+    /**
+     * Disable premium plugins for all detected websites
+     */
+    public function disablePremiumPluginsAll($cacheFile = 'cached.json', $noBackup = false) {
+        $cache = $this->loadCache($cacheFile);
+        if (!$cache || empty($cache['installations'])) {
+            $this->log("❌ Error: No installations found in cache", 'error');
+            return false;
+        }
+        
+        $installations = $cache['installations'];
+        $totalWebsites = count($installations);
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Disabling Premium Plugins - All Websites ===", 'success');
+        $this->log("Total websites to process: {$totalWebsites}", 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        $successCount = 0;
+        $failureCount = 0;
+        
+        foreach ($installations as $index => $installation) {
+            $num = $index + 1;
+            $domain = $installation['domain'];
+            
+            $this->log("\n[{$num}/{$totalWebsites}] Processing: {$domain}", 'info');
+            $this->log(str_repeat("-", 60), 'info');
+            
+            if ($this->disablePremiumPlugins($domain, $cacheFile, $noBackup)) {
+                $successCount++;
+            } else {
+                $failureCount++;
+            }
+        }
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Bulk Disable Summary ===", 'success');
+        $this->log("✅ Successfully processed: {$successCount} website(s)", 'success');
+        $this->log("❌ Failed: {$failureCount} website(s)", $failureCount > 0 ? 'error' : 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        return $failureCount === 0;
+    }
+    
+    /**
+     * Disable premium themes for all detected websites
+     */
+    public function disablePremiumThemesAll($cacheFile = 'cached.json', $noBackup = false) {
+        $cache = $this->loadCache($cacheFile);
+        if (!$cache || empty($cache['installations'])) {
+            $this->log("❌ Error: No installations found in cache", 'error');
+            return false;
+        }
+        
+        $installations = $cache['installations'];
+        $totalWebsites = count($installations);
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Disabling Premium Themes - All Websites ===", 'success');
+        $this->log("Total websites to process: {$totalWebsites}", 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        $successCount = 0;
+        $failureCount = 0;
+        
+        foreach ($installations as $index => $installation) {
+            $num = $index + 1;
+            $domain = $installation['domain'];
+            
+            $this->log("\n[{$num}/{$totalWebsites}] Processing: {$domain}", 'info');
+            $this->log(str_repeat("-", 60), 'info');
+            
+            if ($this->disablePremiumThemes($domain, $cacheFile, $noBackup)) {
+                $successCount++;
+            } else {
+                $failureCount++;
+            }
+        }
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Bulk Disable Summary ===", 'success');
+        $this->log("✅ Successfully processed: {$successCount} website(s)", 'success');
+        $this->log("❌ Failed: {$failureCount} website(s)", $failureCount > 0 ? 'error' : 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        return $failureCount === 0;
+    }
+    
+    /**
+     * Disable all premium plugins and themes for all detected websites
+     */
+    public function disableAllPremiumAll($cacheFile = 'cached.json', $noBackup = false) {
+        $cache = $this->loadCache($cacheFile);
+        if (!$cache || empty($cache['installations'])) {
+            $this->log("❌ Error: No installations found in cache", 'error');
+            return false;
+        }
+        
+        $installations = $cache['installations'];
+        $totalWebsites = count($installations);
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Disabling All Premium Items - All Websites ===", 'success');
+        $this->log("Total websites to process: {$totalWebsites}", 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        $successCount = 0;
+        $failureCount = 0;
+        
+        foreach ($installations as $index => $installation) {
+            $num = $index + 1;
+            $domain = $installation['domain'];
+            
+            $this->log("\n[{$num}/{$totalWebsites}] Processing: {$domain}", 'info');
+            $this->log(str_repeat("-", 60), 'info');
+            
+            if ($this->disableAllPremium($domain, $cacheFile, $noBackup)) {
+                $successCount++;
+            } else {
+                $failureCount++;
+            }
+        }
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Bulk Disable Summary ===", 'success');
+        $this->log("✅ Successfully processed: {$successCount} website(s)", 'success');
+        $this->log("❌ Failed: {$failureCount} website(s)", $failureCount > 0 ? 'error' : 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        return $failureCount === 0;
+    }
+    
+    /**
+     * Restore disabled items for a specific website
+     */
+    public function restoreDisabled($website, $cacheFile = 'cached.json') {
+        $installation = $this->getInstallationOrFail($website, $cacheFile);
+        if (!$installation) return false;
+        
+        if (empty($installation['disabled_items'])) {
+            $this->log("\n✅ No disabled items found for: {$installation['domain']}", 'info');
+            return true;
+        }
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Restoring Disabled Items ===", 'success');
+        $this->log("Website: {$installation['domain']}", 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        $stats = ['restored' => 0, 'failed' => 0, 'not_found' => 0];
+        $restoredItems = [];
+        
+        foreach ($installation['disabled_items'] as $item) {
+            $type = ucfirst($item['type']);
+            $this->log("\n[{$type}] {$item['name']}", 'info');
+            
+            if (!file_exists($item['disabled_path'])) {
+                $this->log("  ⚠️  NOT FOUND - Disabled path does not exist", 'warning');
+                $stats['not_found']++;
+                continue;
+            }
+            
+            if (file_exists($item['original_path'])) {
+                $this->log("  ⚠️  SKIPPED - Original path already exists", 'warning');
+                $stats['not_found']++;
+                continue;
+            }
+            
+            if (rename($item['disabled_path'], $item['original_path'])) {
+                $this->log("  ✅ RESTORED - Renamed back to: {$item['name']}", 'success');
+                $stats['restored']++;
+                $restoredItems[] = $item['name'];
+            } else {
+                $this->log("  ❌ FAILED - Could not rename directory", 'error');
+                $stats['failed']++;
+            }
+        }
+        
+        // Remove restored items from cache
+        if (!empty($restoredItems)) {
+            $this->removeRestoredItemsFromCache($installation, $restoredItems, $cacheFile);
+        }
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Restore Summary ===", 'success');
+        $this->log("✅ Restored: {$stats['restored']} item(s)", 'success');
+        $this->log("⚠️  Not found: {$stats['not_found']} item(s)", 'warning');
+        $this->log("❌ Failed: {$stats['failed']} item(s)", $stats['failed'] > 0 ? 'error' : 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        return true;
+    }
+    
+    /**
+     * Update cache with disabled items information
+     */
+    private function updateCacheWithDisabledItems($installation, $disabledItems, $cacheFile) {
+        $cache = $this->loadCache($cacheFile);
+        if (!$cache) return;
+        
+        // Find and update the installation
+        foreach ($cache['installations'] as &$inst) {
+            if ($inst['path'] === $installation['path']) {
+                if (!isset($inst['disabled_items'])) {
+                    $inst['disabled_items'] = [];
+                }
+                
+                // Add new disabled items
+                $inst['disabled_items'] = array_merge(
+                    $inst['disabled_items'],
+                    $disabledItems
+                );
+                
+                break;
+            }
+        }
+        
+        // Save updated cache
+        $json = json_encode($cache, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        file_put_contents($cacheFile, $json);
+    }
+    
+    /**
+     * Remove restored items from cache
+     */
+    private function removeRestoredItemsFromCache($installation, $restoredItems, $cacheFile) {
+        $cache = $this->loadCache($cacheFile);
+        if (!$cache) return;
+        
+        // Find and update the installation
+        foreach ($cache['installations'] as &$inst) {
+            if ($inst['path'] === $installation['path']) {
+                if (isset($inst['disabled_items'])) {
+                    // Remove restored items
+                    $inst['disabled_items'] = array_filter(
+                        $inst['disabled_items'],
+                        function($item) use ($restoredItems) {
+                            return !in_array($item['name'], $restoredItems);
+                        }
+                    );
+                    
+                    // Re-index array
+                    $inst['disabled_items'] = array_values($inst['disabled_items']);
+                }
+                
+                break;
+            }
+        }
+        
+        // Save updated cache
+        $json = json_encode($cache, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        file_put_contents($cacheFile, $json);
     }
     
     /**
@@ -1983,6 +2528,24 @@ Usage:
   # Reinstall everything (core + plugins + themes)
   php scan.php --reinstall-all --website example.com
   
+  # Bulk reinstall all detected websites
+  php scan.php --reinstall-all-websites
+  php scan.php --reinstall-all-websites --force --no-backup
+  php scan.php --reinstall-all-websites --wp 6.4.2
+  
+  # Disable premium plugins/themes (single website)
+  php scan.php --disable-premium-plugins --website example.com
+  php scan.php --disable-premium-themes --website example.com
+  php scan.php --disable-all-premium --website example.com
+  
+  # Disable premium plugins/themes (all websites)
+  php scan.php --disable-premium-plugins-all
+  php scan.php --disable-premium-themes-all
+  php scan.php --disable-all-premium-all
+  
+  # Restore disabled items
+  php scan.php --restore-disabled --website example.com
+  
   # Force reinstall even if versions match
   php scan.php --reinstall-plugins --website example.com --force
   
@@ -1993,22 +2556,31 @@ Usage:
   php scan.php --cached custom.json --reinstall-core --website example.com
 
 Options:
-  --detect              Detect WordPress installations and cache info
-  --list                List detected WordPress installations from cache
-  --dry                 Perform a malware scan without making changes
-  --path <path>         Path to scan for WordPress installations
-  --reinstall-core      Reinstall WordPress core files
-  --reinstall-plugins   Reinstall all free plugins
-  --reinstall-plugin    Reinstall specific plugin
-  --reinstall-themes    Reinstall all free themes
-  --reinstall-theme     Reinstall specific theme
-  --reinstall-all       Reinstall core + plugins + themes
-  --report <file>       JSON report file to use for operations
-  --cached <file>       Cache file path (default: cached.json)
-  --website <domain>    Website domain or identifier
-  --wp <version>        WordPress version to install (default: current)
-  --force               Force reinstall even if version is current
-  --only-infected       Only reinstall infected plugins/themes (requires --report)
+  --detect                      Detect WordPress installations and cache info
+  --list                        List detected WordPress installations from cache
+  --dry                         Perform a malware scan without making changes
+  --path <path>                 Path to scan for WordPress installations
+  --reinstall-core              Reinstall WordPress core files
+  --reinstall-plugins           Reinstall all free plugins
+  --reinstall-plugin            Reinstall specific plugin
+  --reinstall-themes            Reinstall all free themes
+  --reinstall-theme             Reinstall specific theme
+  --reinstall-all               Reinstall core + plugins + themes
+  --reinstall-all-websites      Bulk reinstall all detected websites
+  --disable-premium-plugins     Disable premium plugins for specific website
+  --disable-premium-themes      Disable premium themes for specific website
+  --disable-all-premium         Disable all premium items for specific website
+  --disable-premium-plugins-all Disable premium plugins for all websites
+  --disable-premium-themes-all  Disable premium themes for all websites
+  --disable-all-premium-all     Disable all premium items for all websites
+  --restore-disabled            Restore disabled items for specific website
+  --report <file>               JSON report file to use for operations
+  --cached <file>               Cache file path (default: cached.json)
+  --website <domain>            Website domain or identifier
+  --wp <version>                WordPress version to install (default: current)
+  --force                       Force reinstall even if version is current
+  --only-infected               Only reinstall infected plugins/themes (requires --report)
+  --no-backup                   Skip creating backups before operations
 
 Fix Actions (requires --website):
   Delete actions (permanently removes files with backup):
@@ -2054,16 +2626,30 @@ Examples:
   # Full site cleanup
   php scan.php --reinstall-all --website example.com --force
   
+  # Bulk reinstall all websites
+  php scan.php --reinstall-all-websites --force
+  
+  # Disable premium plugins on specific site
+  php scan.php --disable-premium-plugins --website example.com
+  
+  # Disable all premium items across all sites
+  php scan.php --disable-all-premium-all --no-backup
+  
+  # Restore disabled items
+  php scan.php --restore-disabled --website example.com
+  
   # Reinstall specific plugin
   php scan.php --reinstall-plugin jetpack --website example.com
 
 Notes:
-  - Premium plugins/themes are automatically detected and skipped
+  - Premium plugins/themes are automatically detected and skipped during reinstalls
   - Only free plugins/themes from WordPress.org are reinstalled
-  - Backups are created before all destructive operations
+  - Backups are created before all destructive operations (unless --no-backup is used)
   - Use --force to reinstall even if version is up-to-date
   - Quarantined files are tracked in cached.json
   - Fix actions require --website to target specific installation
+  - Disabled items are tracked in cached.json and can be restored later
+  - Disabling renames directories with .disabled suffix to prevent loading
 
 HELP;
     }
@@ -2264,6 +2850,91 @@ switch ($options['mode']) {
             $options['wp_version'], 
             $options['force'],
             $options['no_backup'] ?? false
+        );
+        break;
+        
+    case 'reinstall-all-websites':
+        $scanner->reinstallAllWebsites(
+            $options['cached'], 
+            $options['wp_version'], 
+            $options['force'],
+            $options['no_backup'] ?? false
+        );
+        break;
+        
+    case 'disable-premium-plugins':
+        if (!$options['website']) {
+            echo "Error: --website is required for disable-premium-plugins mode\n";
+            $scanner->displayHelp();
+            exit(1);
+        }
+        
+        $scanner->disablePremiumPlugins(
+            $options['website'], 
+            $options['cached'],
+            $options['no_backup'] ?? false
+        );
+        break;
+        
+    case 'disable-premium-themes':
+        if (!$options['website']) {
+            echo "Error: --website is required for disable-premium-themes mode\n";
+            $scanner->displayHelp();
+            exit(1);
+        }
+        
+        $scanner->disablePremiumThemes(
+            $options['website'], 
+            $options['cached'],
+            $options['no_backup'] ?? false
+        );
+        break;
+        
+    case 'disable-all-premium':
+        if (!$options['website']) {
+            echo "Error: --website is required for disable-all-premium mode\n";
+            $scanner->displayHelp();
+            exit(1);
+        }
+        
+        $scanner->disableAllPremium(
+            $options['website'], 
+            $options['cached'],
+            $options['no_backup'] ?? false
+        );
+        break;
+        
+    case 'disable-premium-plugins-all':
+        $scanner->disablePremiumPluginsAll(
+            $options['cached'],
+            $options['no_backup'] ?? false
+        );
+        break;
+        
+    case 'disable-premium-themes-all':
+        $scanner->disablePremiumThemesAll(
+            $options['cached'],
+            $options['no_backup'] ?? false
+        );
+        break;
+        
+    case 'disable-all-premium-all':
+        $scanner->disableAllPremiumAll(
+            $options['cached'],
+            $options['no_backup'] ?? false
+        );
+        break;
+        
+    case 'restore-disabled':
+        if (!$options['website']) {
+            echo "Error: --website is required for restore-disabled mode\n";
+            $scanner->displayHelp();
+            exit(1);
+        }
+        
+        $scanner->restoreDisabled(
+            $options['website'], 
+            $options['cached']
         );
         break;
         
