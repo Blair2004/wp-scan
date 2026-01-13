@@ -19,6 +19,9 @@ class WordPressMalwareScanner {
     private $infectedFiles = 0;
     private $startTime;
     
+    // Maximum number of error messages to display before truncating
+    const MAX_ERROR_MESSAGES = 5;
+    
     public function __construct() {
         $this->startTime = microtime(true);
         $this->initializePatterns();
@@ -1503,7 +1506,7 @@ class WordPressMalwareScanner {
             // Change ownership of root directory first
             if (!@chown($wpPath, $uid) || !@chgrp($wpPath, $gid)) {
                 $errorCount++;
-                $this->log("  Warning: Could not change ownership of root directory", 'warning');
+                $this->log("  Warning: Could not change ownership of root directory: {$wpPath}", 'warning');
             }
             
             // Recursively change ownership using PHP's native function
@@ -1516,7 +1519,7 @@ class WordPressMalwareScanner {
                 $itemPath = $item->getPathname();
                 if (!@chown($itemPath, $uid) || !@chgrp($itemPath, $gid)) {
                     $errorCount++;
-                    if ($errorCount <= 5) {  // Only show first 5 errors
+                    if ($errorCount <= self::MAX_ERROR_MESSAGES) {
                         $this->log("  Warning: Could not change ownership of: " . $itemPath, 'warning');
                     }
                 }
@@ -1578,7 +1581,7 @@ class WordPressMalwareScanner {
                 $dirCount++;
             } else {
                 $errorCount++;
-                $this->log("  Warning: Could not change permissions of root directory", 'warning');
+                $this->log("  Warning: Could not change permissions of root directory: {$wpPath}", 'warning');
             }
             
             // Recursively change permissions using PHP's native function
@@ -1595,7 +1598,7 @@ class WordPressMalwareScanner {
                         $dirCount++;
                     } else {
                         $errorCount++;
-                        if ($errorCount <= 5) {  // Only show first 5 errors
+                        if ($errorCount <= self::MAX_ERROR_MESSAGES) {
                             $this->log("  Warning: Could not change permissions of directory: " . $itemPath, 'warning');
                         }
                     }
@@ -1604,7 +1607,7 @@ class WordPressMalwareScanner {
                         $fileCount++;
                     } else {
                         $errorCount++;
-                        if ($errorCount <= 5) {  // Only show first 5 errors
+                        if ($errorCount <= self::MAX_ERROR_MESSAGES) {
                             $this->log("  Warning: Could not change permissions of file: " . $itemPath, 'warning');
                         }
                     }
