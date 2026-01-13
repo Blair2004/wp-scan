@@ -2418,7 +2418,7 @@ class WordPressMalwareScanner {
         
         $vulnerabilities = [];
         $fileName = basename($filePath);
-        $isHiddenFile = $fileName[0] === '.';
+        $isHiddenFile = !empty($fileName) && $fileName[0] === '.';
         
         // Check for PHP code in non-PHP files
         if (preg_match('/<\?php/i', $content)) {
@@ -2460,7 +2460,9 @@ class WordPressMalwareScanner {
         }
         
         // Check for hex escape sequences (common obfuscation technique)
-        if (preg_match('/(\\\\x[0-9a-fA-F]{2}){5,}/', $content)) {
+        // Count total hex escape occurrences (not necessarily consecutive)
+        $hexEscapeCount = preg_match_all('/\\\\x[0-9a-fA-F]{2}/', $content, $matches);
+        if ($hexEscapeCount >= 3) {
             $vulnerabilities[] = [
                 'type' => 'obfuscation',
                 'pattern' => 'hex_escape_sequences',
