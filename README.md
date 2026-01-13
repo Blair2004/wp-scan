@@ -297,6 +297,14 @@ php scan.php --restore-disabled --website example.com
 - `--disable-all-premium` - Disable all premium items for specific website
 - `--restore-disabled` - Restore previously disabled items for specific website
 
+### Ownership and Permission Management (require `--website`, only for /home/xxx/ paths)
+- `--restore-ownership` - Restore ownership to user extracted from /home/xxx/ path
+- `--restore-permissions` - Restore standard permissions (755 for directories, 644 for files)
+
+### Bulk Ownership and Permission Management (no `--website` required, only for /home/xxx/ paths)
+- `--restore-ownership-all` - Bulk restore ownership for all detected websites
+- `--restore-permissions-all` - Bulk restore permissions for all detected websites
+
 ### Options
 - `--path <path>` - Path to scan for WordPress installations
 - `--report <file>` - JSON report file to use (default: `scan_report.json`)
@@ -307,6 +315,84 @@ php scan.php --restore-disabled --website example.com
 - `--only-infected` - Only reinstall infected plugins/themes (requires `--report`)
 - `--no-backup` - Skip creating backups before operations (faster but less safe)
 - `--no-backup` - Skip backup creation (not recommended)
+
+## Ownership and Permission Restoration
+
+The scanner provides special commands to restore ownership and permissions for websites located under `/home/xxx/` paths (e.g., `/home/forge/website.com`).
+
+### Restore Ownership
+
+```bash
+# Automatically detects username from path and restores ownership
+php scan.php --restore-ownership --website example.com
+
+# Example: For /home/forge/website.com, sets ownership to forge:forge
+# Requires sudo privileges
+sudo php scan.php --restore-ownership --website example.com
+```
+
+**How it works:**
+- Validates that the website is under `/home/xxx/` path
+- Extracts the username from the path (e.g., "forge" from `/home/forge/website.com`)
+- Verifies the user exists on the system
+- Recursively applies `chown username:username` to all files and directories
+
+### Restore Permissions
+
+```bash
+# Applies standard WordPress permissions
+php scan.php --restore-permissions --website example.com
+
+# Requires sudo privileges
+sudo php scan.php --restore-permissions --website example.com
+```
+
+**How it works:**
+- Validates that the website is under `/home/xxx/` path
+- Sets all directories to 755 permissions
+- Sets all files to 644 permissions
+- Applies changes recursively
+
+### Combined Workflow
+
+```bash
+# Complete post-scan cleanup workflow
+sudo php scan.php --restore-ownership --website example.com
+sudo php scan.php --restore-permissions --website example.com
+```
+
+### Bulk Operations
+
+For environments with multiple websites under `/home/xxx/` paths, use bulk commands to process all detected websites at once:
+
+```bash
+# Restore ownership for all websites
+sudo php scan.php --restore-ownership-all
+
+# Restore permissions for all websites
+sudo php scan.php --restore-permissions-all
+
+# Complete bulk workflow
+php scan.php --detect --path /home
+php scan.php --dry
+sudo php scan.php --restore-ownership-all
+sudo php scan.php --restore-permissions-all
+```
+
+**Bulk operation features:**
+- Automatically processes all detected websites from cache
+- Skips websites not under `/home/xxx/` paths with clear logging
+- Reports success/failure/skipped counts
+- Only requires sudo privileges once for all websites
+
+### Requirements and Limitations
+
+⚠️ **Important Notes:**
+1. **Path Restriction**: Both commands only work for websites under `/home/xxx/` paths
+2. **Sudo Required**: These commands typically require sudo/root privileges
+3. **User Validation**: The username must exist on the system
+4. **Error Handling**: Commands validate paths and provide clear error messages
+5. **Safe Defaults**: 755 for directories and 644 for files are WordPress-recommended permissions
 
 ## Malware Detection Patterns
 
@@ -421,6 +507,29 @@ php scan.php --reinstall-plugins --website example.com --force
 
 # Restore the disabled premium plugins
 php scan.php --restore-disabled --website example.com
+```
+
+### Example 6: Restoring Ownership and Permissions for /home/ Sites
+
+```bash
+# Complete cleanup workflow for sites under /home/xxx/
+# Step 1: Detect site (e.g., /home/forge/website.com)
+php scan.php --detect --path /home/forge
+
+# Step 2: Scan for malware
+php scan.php --dry
+
+# Step 3: Clean infected files
+php scan.php --delete-high-severity --website example.com
+
+# Step 4: Reinstall core and plugins
+php scan.php --reinstall-all --website example.com --force
+
+# Step 5: Restore ownership to the user from path
+sudo php scan.php --restore-ownership --website example.com
+
+# Step 6: Restore standard permissions
+sudo php scan.php --restore-permissions --website example.com
 ```
 
 ## Safety Notes

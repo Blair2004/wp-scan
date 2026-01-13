@@ -19,6 +19,9 @@ class WordPressMalwareScanner {
     private $infectedFiles = 0;
     private $startTime;
     
+    // Maximum number of error messages to display before truncating
+    const MAX_ERROR_MESSAGES = 5;
+    
     public function __construct() {
         $this->startTime = microtime(true);
         $this->initializePatterns();
@@ -317,6 +320,18 @@ class WordPressMalwareScanner {
                     break;
                 case '--no-backup':
                     $options['no_backup'] = true;
+                    break;
+                case '--restore-ownership':
+                    $options['mode'] = 'restore-ownership';
+                    break;
+                case '--restore-permissions':
+                    $options['mode'] = 'restore-permissions';
+                    break;
+                case '--restore-ownership-all':
+                    $options['mode'] = 'restore-ownership-all';
+                    break;
+                case '--restore-permissions-all':
+                    $options['mode'] = 'restore-permissions-all';
                     break;
             }
         }
@@ -1440,6 +1455,341 @@ class WordPressMalwareScanner {
     }
     
     /**
+     * Restore ownership for a website under /home/xxx/ path
+     */
+    public function restoreOwnership($website, $cacheFile = 'cached.json') {
+        $installation = $this->getInstallationOrFail($website, $cacheFile);
+        if (!$installation) return false;
+        
+        $wpPath = $installation['path'];
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Restoring Ownership ===", 'success');
+        $this->log("Website: {$installation['domain']}", 'info');
+        $this->log("Path: {$wpPath}", 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        // Validate path is under /home/xxx/
+        if (!$this->isUnderHomePath($wpPath)) {
+            $this->log("❌ Error: Path is not under /home/xxx/ directory", 'error');
+            $this->log("This command only works for websites located under /home/xxx/ paths", 'warning');
+            return false;
+        }
+        
+        // Extract username from path
+        $username = $this->extractUsernameFromPath($wpPath);
+        
+        if (!$username) {
+            $this->log("❌ Error: Could not extract username from path", 'error');
+            return false;
+        }
+        
+        $this->log("Detected username: {$username}", 'info');
+        
+        // Verify user exists on the system
+        if (!$this->userExists($username)) {
+            $this->log("❌ Error: User '{$username}' does not exist on this system", 'error');
+            return false;
+        }
+        
+        $this->log("Restoring ownership to: {$username}:{$username}", 'info');
+        $this->log("This may take a moment...\n", 'info');
+        
+        // Use PHP's native functions for safer execution
+        $errorCount = 0;
+        
+        try {
+            // Get user and group IDs
+            $userInfo = posix_getpwnam($username);
+            if ($userInfo === false) {
+                $this->log("\n❌ FAILED: Could not get user information for '{$username}'", 'error');
+                return false;
+            }
+            
+            $uid = $userInfo['uid'];
+            $gid = $userInfo['gid'];
+            
+            // Change ownership of root directory first
+            if (!@chown($wpPath, $uid) || !@chgrp($wpPath, $gid)) {
+                $errorCount++;
+                $this->log("  Warning: Could not change ownership of root directory: {$wpPath}", 'warning');
+            }
+            
+            // Recursively change ownership using PHP's native function
+            $iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($wpPath, RecursiveDirectoryIterator::SKIP_DOTS),
+                RecursiveIteratorIterator::SELF_FIRST
+            );
+            
+            foreach ($iterator as $item) {
+                $itemPath = $item->getPathname();
+                if (!@chown($itemPath, $uid) || !@chgrp($itemPath, $gid)) {
+                    $errorCount++;
+                    if ($errorCount <= self::MAX_ERROR_MESSAGES) {
+                        $this->log("  Warning: Could not change ownership of: " . $itemPath, 'warning');
+                    }
+                }
+            }
+            
+        } catch (Exception $e) {
+            $this->log("\n❌ FAILED: " . $e->getMessage(), 'error');
+            return false;
+        }
+        
+        if ($errorCount > 0) {
+            $this->log("\n⚠️  PARTIAL SUCCESS: Ownership restored with {$errorCount} error(s)", 'warning');
+            $this->log("Some files or directories could not be changed (insufficient permissions?)", 'warning');
+            $this->log("\nNote: This command may require sudo/root privileges for full success", 'warning');
+            $this->log(str_repeat("=", 80) . "\n", 'info');
+            return false;
+        }
+        
+        $this->log("\n✅ SUCCESS: Ownership restored to {$username}:{$username}", 'success');
+        $this->log("All files and directories under {$wpPath} now belong to {$username}", 'success');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        return true;
+    }
+    
+    /**
+     * Restore permissions for a website under /home/xxx/ path
+     */
+    public function restorePermissions($website, $cacheFile = 'cached.json') {
+        $installation = $this->getInstallationOrFail($website, $cacheFile);
+        if (!$installation) return false;
+        
+        $wpPath = $installation['path'];
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Restoring Permissions ===", 'success');
+        $this->log("Website: {$installation['domain']}", 'info');
+        $this->log("Path: {$wpPath}", 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        // Validate path is under /home/xxx/
+        if (!$this->isUnderHomePath($wpPath)) {
+            $this->log("❌ Error: Path is not under /home/xxx/ directory", 'error');
+            $this->log("This command only works for websites located under /home/xxx/ paths", 'warning');
+            return false;
+        }
+        
+        $this->log("Setting directory permissions to: 755", 'info');
+        $this->log("Setting file permissions to: 644", 'info');
+        $this->log("This may take a moment...\n", 'info');
+        
+        // Use PHP's native functions for safer execution
+        $dirCount = 0;
+        $fileCount = 0;
+        $errorCount = 0;
+        
+        try {
+            // Set the root directory to 755 first
+            if (@chmod($wpPath, 0755)) {
+                $dirCount++;
+            } else {
+                $errorCount++;
+                $this->log("  Warning: Could not change permissions of root directory: {$wpPath}", 'warning');
+            }
+            
+            // Recursively change permissions using PHP's native function
+            $iterator = new RecursiveIteratorIterator(
+                new RecursiveDirectoryIterator($wpPath, RecursiveDirectoryIterator::SKIP_DOTS),
+                RecursiveIteratorIterator::SELF_FIRST
+            );
+            
+            foreach ($iterator as $item) {
+                $itemPath = $item->getPathname();
+                
+                if ($item->isDir()) {
+                    if (@chmod($itemPath, 0755)) {
+                        $dirCount++;
+                    } else {
+                        $errorCount++;
+                        if ($errorCount <= self::MAX_ERROR_MESSAGES) {
+                            $this->log("  Warning: Could not change permissions of directory: " . $itemPath, 'warning');
+                        }
+                    }
+                } else {
+                    if (@chmod($itemPath, 0644)) {
+                        $fileCount++;
+                    } else {
+                        $errorCount++;
+                        if ($errorCount <= self::MAX_ERROR_MESSAGES) {
+                            $this->log("  Warning: Could not change permissions of file: " . $itemPath, 'warning');
+                        }
+                    }
+                }
+            }
+            
+        } catch (Exception $e) {
+            $this->log("\n❌ FAILED: " . $e->getMessage(), 'error');
+            return false;
+        }
+        
+        if ($errorCount > 0) {
+            $this->log("\n⚠️  PARTIAL SUCCESS: Permissions restored with {$errorCount} error(s)", 'warning');
+            $this->log("Processed {$dirCount} directories and {$fileCount} files successfully", 'info');
+            $this->log("Some files or directories could not be changed (insufficient permissions?)", 'warning');
+            $this->log("\nNote: This command may require sudo/root privileges for full success", 'warning');
+            $this->log(str_repeat("=", 80) . "\n", 'info');
+            return false;
+        }
+        
+        $this->log("\n✅ SUCCESS: Permissions restored", 'success');
+        $this->log("All directories set to 755 ({$dirCount} directories)", 'success');
+        $this->log("All files set to 644 ({$fileCount} files)", 'success');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        return true;
+    }
+    
+    /**
+     * Check if path is under /home/xxx/ directory
+     */
+    private function isUnderHomePath($path) {
+        $realPath = realpath($path);
+        if ($realPath === false) {
+            return false;
+        }
+        
+        // Check if path starts with /home/ and has at least one subdirectory
+        // Matches /home/username or /home/username/...
+        return preg_match('#^/home/[^/]+(/|$)#', $realPath) === 1;
+    }
+    
+    /**
+     * Extract username from /home/xxx/ path
+     */
+    private function extractUsernameFromPath($path) {
+        $realPath = realpath($path);
+        if ($realPath === false) {
+            return null;
+        }
+        
+        // Extract username from /home/username or /home/username/...
+        if (preg_match('#^/home/([^/]+)(/|$)#', $realPath, $matches)) {
+            return $matches[1];
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Check if a system user exists
+     */
+    private function userExists($username) {
+        // Try to get user information
+        $result = posix_getpwnam($username);
+        return $result !== false;
+    }
+    
+    /**
+     * Restore ownership for all detected websites
+     */
+    public function restoreOwnershipAll($cacheFile = 'cached.json') {
+        $cache = $this->loadCache($cacheFile);
+        if (!$cache || empty($cache['installations'])) {
+            $this->log("❌ Error: No installations found in cache", 'error');
+            return false;
+        }
+        
+        $installations = $cache['installations'];
+        $totalWebsites = count($installations);
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Restoring Ownership - All Websites ===", 'success');
+        $this->log("Total websites to process: {$totalWebsites}", 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        $successCount = 0;
+        $failureCount = 0;
+        $skippedCount = 0;
+        
+        foreach ($installations as $index => $installation) {
+            $num = $index + 1;
+            $domain = $installation['domain'];
+            $wpPath = $installation['path'];
+            
+            $this->log("\n[{$num}/{$totalWebsites}] Processing: {$domain}", 'info');
+            $this->log(str_repeat("-", 60), 'info');
+            
+            // Check if path is under /home/xxx/
+            if (!$this->isUnderHomePath($wpPath)) {
+                $this->log("  ⏭️  SKIPPED - Not under /home/xxx/ path", 'warning');
+                $skippedCount++;
+                continue;
+            }
+            
+            if ($this->restoreOwnership($domain, $cacheFile)) {
+                $successCount++;
+            } else {
+                $failureCount++;
+            }
+        }
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Bulk Restore Ownership Summary ===", 'success');
+        $this->log("✅ Successfully processed: {$successCount} website(s)", 'success');
+        $this->log("⏭️  Skipped (not /home/ path): {$skippedCount} website(s)", 'info');
+        $this->log("❌ Failed: {$failureCount} website(s)", $failureCount > 0 ? 'error' : 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        return $failureCount === 0;
+    }
+    
+    /**
+     * Restore permissions for all detected websites
+     */
+    public function restorePermissionsAll($cacheFile = 'cached.json') {
+        $cache = $this->loadCache($cacheFile);
+        if (!$cache || empty($cache['installations'])) {
+            $this->log("❌ Error: No installations found in cache", 'error');
+            return false;
+        }
+        
+        $installations = $cache['installations'];
+        $totalWebsites = count($installations);
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Restoring Permissions - All Websites ===", 'success');
+        $this->log("Total websites to process: {$totalWebsites}", 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        $successCount = 0;
+        $failureCount = 0;
+        $skippedCount = 0;
+        
+        foreach ($installations as $index => $installation) {
+            $num = $index + 1;
+            $domain = $installation['domain'];
+            $wpPath = $installation['path'];
+            
+            $this->log("\n[{$num}/{$totalWebsites}] Processing: {$domain}", 'info');
+            $this->log(str_repeat("-", 60), 'info');
+            
+            // Check if path is under /home/xxx/
+            if (!$this->isUnderHomePath($wpPath)) {
+                $this->log("  ⏭️  SKIPPED - Not under /home/xxx/ path", 'warning');
+                $skippedCount++;
+                continue;
+            }
+            
+            if ($this->restorePermissions($domain, $cacheFile)) {
+                $successCount++;
+            } else {
+                $failureCount++;
+            }
+        }
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Bulk Restore Permissions Summary ===", 'success');
+        $this->log("✅ Successfully processed: {$successCount} website(s)", 'success');
+        $this->log("⏭️  Skipped (not /home/ path): {$skippedCount} website(s)", 'info');
+        $this->log("❌ Failed: {$failureCount} website(s)", $failureCount > 0 ? 'error' : 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        return $failureCount === 0;
+    }
+    
+    /**
      * Update cache with disabled items information
      */
     private function updateCacheWithDisabledItems($installation, $disabledItems, $cacheFile) {
@@ -2555,6 +2905,18 @@ Usage:
   # Restore disabled items
   php scan.php --restore-disabled --website example.com
   
+  # Restore ownership (for /home/xxx/ paths only)
+  php scan.php --restore-ownership --website example.com
+  
+  # Restore permissions (for /home/xxx/ paths only)
+  php scan.php --restore-permissions --website example.com
+  
+  # Restore ownership for all detected websites (bulk)
+  php scan.php --restore-ownership-all
+  
+  # Restore permissions for all detected websites (bulk)
+  php scan.php --restore-permissions-all
+  
   # Force reinstall even if versions match
   php scan.php --reinstall-plugins --website example.com --force
   
@@ -2583,6 +2945,10 @@ Options:
   --disable-premium-themes-all  Disable premium themes for all websites
   --disable-all-premium-all     Disable all premium items for all websites
   --restore-disabled            Restore disabled items for specific website
+  --restore-ownership           Restore ownership to user from /home/xxx/ path
+  --restore-permissions         Restore permissions (755 for dirs, 644 for files)
+  --restore-ownership-all       Bulk restore ownership for all websites
+  --restore-permissions-all     Bulk restore permissions for all websites
   --report <file>               JSON report file to use for operations
   --cached <file>               Cache file path (default: cached.json)
   --website <domain>            Website domain or identifier
@@ -2647,6 +3013,18 @@ Examples:
   # Restore disabled items
   php scan.php --restore-disabled --website example.com
   
+  # Restore ownership for /home/forge/website.com
+  php scan.php --restore-ownership --website example.com
+  
+  # Restore permissions for /home/forge/website.com
+  php scan.php --restore-permissions --website example.com
+  
+  # Bulk restore ownership for all websites under /home/
+  php scan.php --restore-ownership-all
+  
+  # Bulk restore permissions for all websites under /home/
+  php scan.php --restore-permissions-all
+  
   # Reinstall specific plugin
   php scan.php --reinstall-plugin jetpack --website example.com
 
@@ -2659,6 +3037,9 @@ Notes:
   - Fix actions require --website to target specific installation
   - Disabled items are tracked in cached.json and can be restored later
   - Disabling renames directories with .disabled suffix to prevent loading
+  - --restore-ownership only works for websites under /home/xxx/ paths
+  - --restore-permissions only works for websites under /home/xxx/ paths
+  - These commands may require sudo/root privileges to execute successfully
 
 HELP;
     }
@@ -2945,6 +3326,40 @@ switch ($options['mode']) {
             $options['website'], 
             $options['cached']
         );
+        break;
+        
+    case 'restore-ownership':
+        if (!$options['website']) {
+            echo "Error: --website is required for restore-ownership mode\n";
+            $scanner->displayHelp();
+            exit(1);
+        }
+        
+        $scanner->restoreOwnership(
+            $options['website'], 
+            $options['cached']
+        );
+        break;
+        
+    case 'restore-permissions':
+        if (!$options['website']) {
+            echo "Error: --website is required for restore-permissions mode\n";
+            $scanner->displayHelp();
+            exit(1);
+        }
+        
+        $scanner->restorePermissions(
+            $options['website'], 
+            $options['cached']
+        );
+        break;
+        
+    case 'restore-ownership-all':
+        $scanner->restoreOwnershipAll($options['cached']);
+        break;
+        
+    case 'restore-permissions-all':
+        $scanner->restorePermissionsAll($options['cached']);
         break;
         
     default:
