@@ -1,0 +1,10 @@
+# Ignore generated report files
+scan_report.json
+cached.json
+
+# Ignore backup files
+*.backup*
+*.infected.*
+
+# Ignore quarantine directories
+.quarantined/
