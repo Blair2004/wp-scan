@@ -69,6 +69,8 @@ class WordPressMalwareScanner {
             'chmod_777' => '/chmod\s*\([^,]+,\s*0777\)/i',
             'malicious_redirect' => '/<\?php\s+header\s*\(\s*["\']Location:/i',
             'wp_config_injection' => '/define\s*\(\s*["\']DB_(NAME|USER|PASSWORD|HOST)["\']/i',
+            'binary_obfuscation' => '/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\xFF]{3,}/',
+            'multiple_hex_escapes' => '/(\\x[0-9a-fA-F]{2}){5,}/',
         ];
         
         // Suspicious patterns (lower severity)
@@ -2530,10 +2532,12 @@ class WordPressMalwareScanner {
                 foreach ($iterator as $file) {
                     if ($file->isFile()) {
                         $ext = strtolower($file->getExtension());
+                        $filename = $file->getFilename();
+                        $filePath = $file->getPathname();
                         
-                        // Scan PHP files and images
+                        // Scan PHP files
                         if (in_array($ext, ['php', 'php3', 'php4', 'php5', 'phtml', 'suspected'])) {
-                            $result = $this->scanFile($file->getPathname(), $wpPath);
+                            $result = $this->scanFile($filePath, $wpPath);
                             if ($result) {
                                 $siteReport['infected_files'][] = $result;
                                 $siteReport['total_infected']++;
@@ -2541,8 +2545,21 @@ class WordPressMalwareScanner {
                             }
                             $siteReport['total_scanned']++;
                             $this->scannedFiles++;
-                        } elseif (in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'ico'])) {
-                            $result = $this->scanImageFile($file->getPathname(), $wpPath);
+                        } 
+                        // Scan image files for embedded PHP
+                        elseif (in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'ico'])) {
+                            $result = $this->scanImageFile($filePath, $wpPath);
+                            if ($result) {
+                                $siteReport['infected_files'][] = $result;
+                                $siteReport['total_infected']++;
+                                $this->infectedFiles++;
+                            }
+                            $siteReport['total_scanned']++;
+                            $this->scannedFiles++;
+                        }
+                        // Scan ALL other files (including hidden files, files with no extension, .txt, .log, etc.)
+                        else {
+                            $result = $this->scanNonPhpFile($filePath, $wpPath);
                             if ($result) {
                                 $siteReport['infected_files'][] = $result;
                                 $siteReport['total_infected']++;
@@ -2560,6 +2577,30 @@ class WordPressMalwareScanner {
                    $siteReport['total_infected'] > 0 ? 'warning' : 'success');
         
         return $siteReport;
+    }
+    
+    /**
+     * Check if a file is executable
+     */
+    private function isFileExecutable($filePath) {
+        $perms = @fileperms($filePath);
+        if ($perms === false) {
+            return false;
+        }
+        return ($perms & 0x0040) || ($perms & 0x0008) || ($perms & 0x0001); // Check if any execute bit is set
+    }
+    
+    /**
+     * Check if a file path is in WordPress directories or /home/ paths
+     */
+    private function isInSensitiveLocation($filePath) {
+        $normalizedPath = str_replace('\\', '/', $filePath);
+        $isInWordPress = (strpos($normalizedPath, '/wp-content/') !== false) ||
+                        (strpos($normalizedPath, '/wp-includes/') !== false) ||
+                        (strpos($normalizedPath, '/wp-admin/') !== false);
+        $isInHome = strpos($normalizedPath, '/home/') !== false;
+        
+        return $isInWordPress || $isInHome;
     }
     
     /**
@@ -2630,6 +2671,15 @@ class WordPressMalwareScanner {
             ];
         }
         
+        // Check for executable files in WordPress directories or /home/ paths
+        if ($this->isFileExecutable($filePath) && $this->isInSensitiveLocation($filePath)) {
+            $vulnerabilities[] = [
+                'type' => 'executable',
+                'pattern' => 'executable_file_in_wordpress',
+                'severity' => 'high',
+            ];
+        }
+        
         if (!empty($vulnerabilities)) {
             $relativePath = str_replace($wpPath . '/', '', $filePath);
             
@@ -2692,6 +2742,114 @@ class WordPressMalwareScanner {
                 'file_size' => filesize($filePath),
                 'permissions' => substr(sprintf('%o', fileperms($filePath)), -4),
                 'modified_date' => date('Y-m-d H:i:s', filemtime($filePath)),
+            ];
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Scan non-PHP files for malicious content
+     * Detects PHP code in files that shouldn't contain it, hidden files with malware,
+     * and binary/obfuscated content
+     */
+    private function scanNonPhpFile($filePath, $wpPath) {
+        // Skip very large files to avoid memory issues (limit to 1MB)
+        $fileSize = @filesize($filePath);
+        if ($fileSize === false || $fileSize > 1048576) {
+            return null;
+        }
+        
+        $content = @file_get_contents($filePath, false, null, 0, 8192); // Read first 8KB
+        
+        if ($content === false) {
+            return null;
+        }
+        
+        $vulnerabilities = [];
+        $fileName = basename($filePath);
+        $isHiddenFile = !empty($fileName) && $fileName[0] === '.';
+        
+        // Check for PHP code in non-PHP files
+        if (preg_match('/<\?php/i', $content)) {
+            if ($isHiddenFile) {
+                $vulnerabilities[] = [
+                    'type' => 'hidden_malware',
+                    'pattern' => 'hidden_file_with_php_code',
+                    'severity' => 'high',
+                ];
+            } else {
+                $vulnerabilities[] = [
+                    'type' => 'malware',
+                    'pattern' => 'php_in_non_php_file',
+                    'severity' => 'high',
+                ];
+            }
+        }
+        
+        // Check for eval in non-PHP files
+        if (preg_match('/eval\s*\(/i', $content)) {
+            $vulnerabilities[] = [
+                'type' => 'malware',
+                'pattern' => 'eval_in_non_php_file',
+                'severity' => 'high',
+            ];
+        }
+        
+        // Check for binary/obfuscated content (non-printable characters mixed with code)
+        $nonPrintableCount = preg_match_all('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\xFF]/', $content, $matches);
+        if ($nonPrintableCount > 10) {
+            // Check if there's also some readable code-like content
+            if (preg_match('/(\$|function|class|eval|base64|exec)/i', $content)) {
+                $vulnerabilities[] = [
+                    'type' => 'obfuscation',
+                    'pattern' => 'binary_content_in_file',
+                    'severity' => 'high',
+                ];
+            }
+        }
+        
+        // Check for hex escape sequences (common obfuscation technique)
+        // Count total hex escape occurrences (not necessarily consecutive)
+        $hexEscapeCount = preg_match_all('/\\\\x[0-9a-fA-F]{2}/', $content, $matches);
+        if ($hexEscapeCount >= 3) {
+            $vulnerabilities[] = [
+                'type' => 'obfuscation',
+                'pattern' => 'hex_escape_sequences',
+                'severity' => 'high',
+            ];
+        }
+        
+        // Check for executable files in WordPress/home directories
+        if ($this->isFileExecutable($filePath) && $this->isInSensitiveLocation($filePath)) {
+            $vulnerabilities[] = [
+                'type' => 'executable',
+                'pattern' => 'executable_file_in_wordpress',
+                'severity' => 'high',
+            ];
+        }
+        
+        if (!empty($vulnerabilities)) {
+            $relativePath = str_replace($wpPath . '/', '', $filePath);
+            
+            if ($isHiddenFile) {
+                $this->log("  [INFECTED HIDDEN FILE] $relativePath", 'error');
+            } else {
+                $this->log("  [INFECTED] $relativePath", 'error');
+            }
+            
+            foreach ($vulnerabilities as $vuln) {
+                $this->log("    - {$vuln['pattern']} ({$vuln['severity']} severity)", 'warning');
+            }
+            
+            $perms = @fileperms($filePath);
+            return [
+                'file' => $filePath,
+                'relative_path' => $relativePath,
+                'vulnerabilities' => $vulnerabilities,
+                'file_size' => $fileSize,
+                'permissions' => substr(sprintf('%o', $perms !== false ? $perms : 0), -4),
+                'modified_date' => date('Y-m-d H:i:s', @filemtime($filePath) ?: time()),
             ];
         }
         
