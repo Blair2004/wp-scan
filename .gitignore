@@ -8,3 +8,24 @@ cached.json
 
 # Ignore quarantine directories
 .quarantined/
+=======
+# WordPress Scanner temporary files
+cached.json
+scan_report.json
+*.backup.*
+.quarantined/
+
+# PHP temporary files
+*.log
+*.tmp
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
