@@ -22,16 +22,27 @@ A powerful command-line utility for detecting, scanning, and remediating malware
 - **Plugin Reinstall**: Reinstall all free plugins or target specific ones
 - **Theme Reinstall**: Reinstall all free themes or target specific ones
 - **Complete Rebuild**: Reinstall core, plugins, and themes in one operation
+- **Bulk Reinstall**: Reinstall all detected websites with a single command
 - **Smart Detection**: Automatically skips premium plugins/themes
 - **Version Control**: Install specific WordPress versions or use current version
 - **Infected-Only Mode**: Only reinstall components identified as infected
 
+### 🔒 Premium Plugin/Theme Management
+- **Disable Premium Plugins**: Safely disable premium plugins that can't be reinstalled automatically
+- **Disable Premium Themes**: Safely disable premium themes that can't be reinstalled automatically
+- **Bulk Disable**: Disable premium items across all detected websites
+- **Restore Disabled Items**: Re-enable previously disabled plugins/themes
+- **Tracking**: All disabled items are tracked in cache with timestamps
+- **Backup Support**: Optional backup creation before disabling
+
 ### 🔐 Safety Features
 - **Automatic Backups**: Creates backups before all destructive operations
-- **Premium Plugin/Theme Protection**: Never touches premium/non-repository items
+- **Premium Plugin/Theme Protection**: Never touches premium/non-repository items during reinstalls
 - **Quarantine Tracking**: Maintains records of quarantined files in cache
+- **Disabled Item Tracking**: Maintains records of disabled premium items in cache
 - **Force Mode**: Option to reinstall even if current version matches
 - **Dry Run**: Scan without making any changes
+- **No-Backup Mode**: Skip backup creation for faster operations (use with caution)
 
 ## Requirements
 
@@ -207,6 +218,47 @@ php scan.php --reinstall-plugins --website example.com --force
 php scan.php --reinstall-plugins --website example.com --only-infected --report scan_report.json
 ```
 
+### Bulk Reinstall Commands
+
+```bash
+# Reinstall all detected websites (core + plugins + themes)
+php scan.php --reinstall-all-websites
+
+# Bulk reinstall with custom options
+php scan.php --reinstall-all-websites --force --no-backup
+
+# Bulk reinstall with specific WordPress version
+php scan.php --reinstall-all-websites --wp 6.4.2
+```
+
+### Disable Premium Plugins/Themes
+
+```bash
+# Disable premium plugins for specific website
+php scan.php --disable-premium-plugins --website example.com
+
+# Disable premium themes for specific website
+php scan.php --disable-premium-themes --website example.com
+
+# Disable all premium items for specific website
+php scan.php --disable-all-premium --website example.com
+
+# Disable premium plugins across all websites
+php scan.php --disable-premium-plugins-all
+
+# Disable premium themes across all websites
+php scan.php --disable-premium-themes-all
+
+# Disable all premium items across all websites
+php scan.php --disable-all-premium-all
+
+# Disable with no backup (faster, but less safe)
+php scan.php --disable-all-premium --website example.com --no-backup
+
+# Restore disabled items for a website
+php scan.php --restore-disabled --website example.com
+```
+
 ## Command-Line Options
 
 ### Modes
@@ -233,6 +285,18 @@ php scan.php --reinstall-plugins --website example.com --only-infected --report 
 - `--reinstall-theme <name>` - Reinstall specific theme
 - `--reinstall-all` - Reinstall core + plugins + themes
 
+### Bulk Actions (no `--website` required)
+- `--reinstall-all-websites` - Bulk reinstall all detected websites (core + plugins + themes)
+- `--disable-premium-plugins-all` - Disable premium plugins across all detected websites
+- `--disable-premium-themes-all` - Disable premium themes across all detected websites
+- `--disable-all-premium-all` - Disable all premium items across all detected websites
+
+### Premium Management Actions (require `--website`)
+- `--disable-premium-plugins` - Disable premium plugins for specific website
+- `--disable-premium-themes` - Disable premium themes for specific website
+- `--disable-all-premium` - Disable all premium items for specific website
+- `--restore-disabled` - Restore previously disabled items for specific website
+
 ### Options
 - `--path <path>` - Path to scan for WordPress installations
 - `--report <file>` - JSON report file to use (default: `scan_report.json`)
@@ -241,6 +305,7 @@ php scan.php --reinstall-plugins --website example.com --only-infected --report 
 - `--wp <version>` - WordPress version to install (default: current)
 - `--force` - Force reinstall even if version is current
 - `--only-infected` - Only reinstall infected plugins/themes (requires `--report`)
+- `--no-backup` - Skip creating backups before operations (faster but less safe)
 - `--no-backup` - Skip backup creation (not recommended)
 
 ## Malware Detection Patterns
@@ -276,6 +341,7 @@ Contains detected WordPress installations with:
 - List of plugins (with premium detection)
 - List of themes (with premium detection)
 - Quarantined files tracking
+- Disabled items tracking (plugins/themes that have been disabled)
 
 ### scan_report.json
 Contains scan results with:
@@ -328,18 +394,50 @@ php scan.php --reinstall-core --website example.com
 php scan.php --reinstall-all --website example.com --force
 ```
 
+### Example 4: Bulk Operations Across All Sites
+
+```bash
+# Step 1: Detect all WordPress sites
+php scan.php --detect --path /var/www
+
+# Step 2: Disable all premium plugins/themes across all sites
+php scan.php --disable-all-premium-all --no-backup
+
+# Step 3: Bulk reinstall all websites
+php scan.php --reinstall-all-websites --force
+
+# Step 4: Restore disabled items if needed
+php scan.php --restore-disabled --website example.com
+```
+
+### Example 5: Managing Premium Plugins/Themes
+
+```bash
+# Disable premium plugins on a specific site before reinstall
+php scan.php --disable-premium-plugins --website example.com
+
+# Reinstall free plugins
+php scan.php --reinstall-plugins --website example.com --force
+
+# Restore the disabled premium plugins
+php scan.php --restore-disabled --website example.com
+```
+
 ## Safety Notes
 
 ⚠️ **Important Safety Information**
 
 1. **Always test on staging first** - Run the scanner on a staging environment before production
-2. **Backups are automatic** - The tool creates backups before destructive operations, but maintain your own backups
+2. **Backups are automatic** - The tool creates backups before destructive operations (unless --no-backup is used), but maintain your own backups
 3. **Premium plugins/themes** - Premium items are automatically detected and skipped during reinstalls
-4. **Review quarantined files** - Inspect quarantined files in `.quarantined` directories before permanent deletion
-5. **False positives** - Some legitimate code may trigger low-severity warnings (review before deleting)
-6. **Database safety** - This tool only handles files, not database infections
-7. **Permissions** - Ensure the script has proper read/write permissions
-8. **Website parameter** - The `--website` value should match the domain field from `--list` output
+4. **Disabling vs. Deleting** - Disabling renames directories with .disabled suffix; they can be restored later
+5. **Review quarantined files** - Inspect quarantined files in `.quarantined` directories before permanent deletion
+6. **False positives** - Some legitimate code may trigger low-severity warnings (review before deleting)
+7. **Database safety** - This tool only handles files, not database infections
+8. **Permissions** - Ensure the script has proper read/write permissions
+9. **Website parameter** - The `--website` value should match the domain field from `--list` output
+10. **Bulk operations** - Use bulk commands carefully as they affect all detected websites
+11. **Disabled items tracking** - All disabled items are tracked in cached.json and can be restored
 
 ## Troubleshooting
 
@@ -357,6 +455,15 @@ Check the plugin detection logic - only free plugins from WordPress.org should b
 
 ### Files still infected after cleanup
 Some malware may have database components. Check database tables for malicious entries.
+
+### Disabled items not showing in list
+Run `php scan.php --list --cached /path/to/cache.json` to verify disabled items are tracked
+
+### Cannot restore disabled items
+Ensure the disabled directory still exists (e.g., `plugin-name.disabled`) and hasn't been manually removed
+
+### Bulk operations taking too long
+For large numbers of websites, consider processing them individually or use `--no-backup` to speed up operations (less safe)
 
 ## Technical Details
 
