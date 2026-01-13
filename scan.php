@@ -2230,6 +2230,30 @@ class WordPressMalwareScanner {
     }
     
     /**
+     * Check if a file is executable
+     */
+    private function isFileExecutable($filePath) {
+        $perms = @fileperms($filePath);
+        if ($perms === false) {
+            return false;
+        }
+        return ($perms & 0x0040) || ($perms & 0x0008) || ($perms & 0x0001); // Check if any execute bit is set
+    }
+    
+    /**
+     * Check if a file path is in WordPress directories or /home/ paths
+     */
+    private function isInSensitiveLocation($filePath) {
+        $normalizedPath = str_replace('\\', '/', $filePath);
+        $isInWordPress = (strpos($normalizedPath, '/wp-content/') !== false) ||
+                        (strpos($normalizedPath, '/wp-includes/') !== false) ||
+                        (strpos($normalizedPath, '/wp-admin/') !== false);
+        $isInHome = strpos($normalizedPath, '/home/') !== false;
+        
+        return $isInWordPress || $isInHome;
+    }
+    
+    /**
      * Scan a single PHP file for malware
      */
     private function scanFile($filePath, $wpPath) {
@@ -2298,24 +2322,12 @@ class WordPressMalwareScanner {
         }
         
         // Check for executable files in WordPress directories or /home/ paths
-        $perms = fileperms($filePath);
-        $isExecutable = ($perms & 0x0040) || ($perms & 0x0008) || ($perms & 0x0001); // Check if any execute bit is set
-        
-        if ($isExecutable) {
-            // Check if file is in WordPress directory or /home/ path
-            $normalizedPath = str_replace('\\', '/', $filePath);
-            $isInWordPress = (strpos($normalizedPath, '/wp-content/') !== false) ||
-                            (strpos($normalizedPath, '/wp-includes/') !== false) ||
-                            (strpos($normalizedPath, '/wp-admin/') !== false);
-            $isInHome = strpos($normalizedPath, '/home/') !== false;
-            
-            if ($isInWordPress || $isInHome) {
-                $vulnerabilities[] = [
-                    'type' => 'executable',
-                    'pattern' => 'executable_file_in_wordpress',
-                    'severity' => 'high',
-                ];
-            }
+        if ($this->isFileExecutable($filePath) && $this->isInSensitiveLocation($filePath)) {
+            $vulnerabilities[] = [
+                'type' => 'executable',
+                'pattern' => 'executable_file_in_wordpress',
+                'severity' => 'high',
+            ];
         }
         
         if (!empty($vulnerabilities)) {
@@ -2457,25 +2469,12 @@ class WordPressMalwareScanner {
         }
         
         // Check for executable files in WordPress/home directories
-        $perms = @fileperms($filePath);
-        if ($perms !== false) {
-            $isExecutable = ($perms & 0x0040) || ($perms & 0x0008) || ($perms & 0x0001);
-            
-            if ($isExecutable) {
-                $normalizedPath = str_replace('\\', '/', $filePath);
-                $isInWordPress = (strpos($normalizedPath, '/wp-content/') !== false) ||
-                                (strpos($normalizedPath, '/wp-includes/') !== false) ||
-                                (strpos($normalizedPath, '/wp-admin/') !== false);
-                $isInHome = strpos($normalizedPath, '/home/') !== false;
-                
-                if ($isInWordPress || $isInHome) {
-                    $vulnerabilities[] = [
-                        'type' => 'executable',
-                        'pattern' => 'executable_file_in_wordpress',
-                        'severity' => 'high',
-                    ];
-                }
-            }
+        if ($this->isFileExecutable($filePath) && $this->isInSensitiveLocation($filePath)) {
+            $vulnerabilities[] = [
+                'type' => 'executable',
+                'pattern' => 'executable_file_in_wordpress',
+                'severity' => 'high',
+            ];
         }
         
         if (!empty($vulnerabilities)) {
@@ -2491,6 +2490,7 @@ class WordPressMalwareScanner {
                 $this->log("    - {$vuln['pattern']} ({$vuln['severity']} severity)", 'warning');
             }
             
+            $perms = @fileperms($filePath);
             return [
                 'file' => $filePath,
                 'relative_path' => $relativePath,
