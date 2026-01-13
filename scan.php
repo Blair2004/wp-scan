@@ -137,6 +137,15 @@ class WordPressMalwareScanner {
                 }
             }
             
+            // Display disabled items if any
+            if (!empty($installation['disabled_items'])) {
+                $this->log("    🔒 Disabled Items: " . count($installation['disabled_items']), 'warning');
+                foreach ($installation['disabled_items'] as $dItem) {
+                    $type = ucfirst($dItem['type']);
+                    $this->log("      - [{$type}] {$dItem['name']} (Disabled: " . date('Y-m-d H:i:s', $dItem['disabled_at']) . ")", 'warning');
+                }
+            }
+            
             $this->log("", 'info'); // Empty line between installations
         }
         
