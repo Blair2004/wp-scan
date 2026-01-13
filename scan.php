@@ -2683,7 +2683,7 @@ class WordPressMalwareScanner {
         if (!empty($vulnerabilities)) {
             $relativePath = str_replace($wpPath . '/', '', $filePath);
             
-            $this->log("  [INFECTED] $relativePath", 'error');
+            $this->log("  [INFECTED] $filePath", 'error');
             foreach ($vulnerabilities as $vuln) {
                 $this->log("    - {$vuln['pattern']} ({$vuln['severity']} severity)", 'warning');
             }
@@ -2733,7 +2733,7 @@ class WordPressMalwareScanner {
         
         if (!empty($vulnerabilities)) {
             $relativePath = str_replace($wpPath . '/', '', $filePath);
-            $this->log("  [INFECTED IMAGE] $relativePath", 'error');
+            $this->log("  [INFECTED IMAGE] $filePath", 'error');
             
             return [
                 'file' => $filePath,
@@ -2833,9 +2833,9 @@ class WordPressMalwareScanner {
             $relativePath = str_replace($wpPath . '/', '', $filePath);
             
             if ($isHiddenFile) {
-                $this->log("  [INFECTED HIDDEN FILE] $relativePath", 'error');
+                $this->log("  [INFECTED HIDDEN FILE] $filePath", 'error');
             } else {
-                $this->log("  [INFECTED] $relativePath", 'error');
+                $this->log("  [INFECTED] $filePath", 'error');
             }
             
             foreach ($vulnerabilities as $vuln) {
