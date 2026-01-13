@@ -318,6 +318,12 @@ class WordPressMalwareScanner {
                 case '--no-backup':
                     $options['no_backup'] = true;
                     break;
+                case '--restore-ownership':
+                    $options['mode'] = 'restore-ownership';
+                    break;
+                case '--restore-permissions':
+                    $options['mode'] = 'restore-permissions';
+                    break;
             }
         }
         
@@ -1440,6 +1446,186 @@ class WordPressMalwareScanner {
     }
     
     /**
+     * Restore ownership for a website under /home/xxx/ path
+     */
+    public function restoreOwnership($website, $cacheFile = 'cached.json') {
+        $installation = $this->getInstallationOrFail($website, $cacheFile);
+        if (!$installation) return false;
+        
+        $wpPath = $installation['path'];
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Restoring Ownership ===", 'success');
+        $this->log("Website: {$installation['domain']}", 'info');
+        $this->log("Path: {$wpPath}", 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        // Validate path is under /home/xxx/
+        if (!$this->isUnderHomePath($wpPath)) {
+            $this->log("❌ Error: Path is not under /home/xxx/ directory", 'error');
+            $this->log("This command only works for websites located under /home/xxx/ paths", 'warning');
+            return false;
+        }
+        
+        // Extract username from path
+        $username = $this->extractUsernameFromPath($wpPath);
+        
+        if (!$username) {
+            $this->log("❌ Error: Could not extract username from path", 'error');
+            return false;
+        }
+        
+        $this->log("Detected username: {$username}", 'info');
+        
+        // Verify user exists on the system
+        if (!$this->userExists($username)) {
+            $this->log("❌ Error: User '{$username}' does not exist on this system", 'error');
+            return false;
+        }
+        
+        $this->log("Restoring ownership to: {$username}:{$username}", 'info');
+        $this->log("This may take a moment...\n", 'info');
+        
+        // Execute chown command
+        $command = sprintf(
+            'chown -R %s:%s %s 2>&1',
+            escapeshellarg($username),
+            escapeshellarg($username),
+            escapeshellarg($wpPath)
+        );
+        
+        exec($command, $output, $returnCode);
+        
+        if ($returnCode === 0) {
+            $this->log("\n✅ SUCCESS: Ownership restored to {$username}:{$username}", 'success');
+            $this->log("All files and directories under {$wpPath} now belong to {$username}", 'success');
+            $this->log(str_repeat("=", 80) . "\n", 'info');
+            return true;
+        } else {
+            $this->log("\n❌ FAILED: Could not restore ownership", 'error');
+            if (!empty($output)) {
+                $this->log("Error output:", 'error');
+                foreach ($output as $line) {
+                    $this->log("  " . $line, 'error');
+                }
+            }
+            $this->log("\nNote: This command requires sufficient permissions (may need sudo)", 'warning');
+            $this->log(str_repeat("=", 80) . "\n", 'info');
+            return false;
+        }
+    }
+    
+    /**
+     * Restore permissions for a website under /home/xxx/ path
+     */
+    public function restorePermissions($website, $cacheFile = 'cached.json') {
+        $installation = $this->getInstallationOrFail($website, $cacheFile);
+        if (!$installation) return false;
+        
+        $wpPath = $installation['path'];
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Restoring Permissions ===", 'success');
+        $this->log("Website: {$installation['domain']}", 'info');
+        $this->log("Path: {$wpPath}", 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        // Validate path is under /home/xxx/
+        if (!$this->isUnderHomePath($wpPath)) {
+            $this->log("❌ Error: Path is not under /home/xxx/ directory", 'error');
+            $this->log("This command only works for websites located under /home/xxx/ paths", 'warning');
+            return false;
+        }
+        
+        $this->log("Setting directory permissions to: 755", 'info');
+        $this->log("Setting file permissions to: 644", 'info');
+        $this->log("This may take a moment...\n", 'info');
+        
+        // Set directory permissions to 755
+        $dirCommand = sprintf(
+            'find %s -type d -exec chmod 755 {} + 2>&1',
+            escapeshellarg($wpPath)
+        );
+        
+        exec($dirCommand, $dirOutput, $dirReturnCode);
+        
+        // Set file permissions to 644
+        $fileCommand = sprintf(
+            'find %s -type f -exec chmod 644 {} + 2>&1',
+            escapeshellarg($wpPath)
+        );
+        
+        exec($fileCommand, $fileOutput, $fileReturnCode);
+        
+        if ($dirReturnCode === 0 && $fileReturnCode === 0) {
+            $this->log("\n✅ SUCCESS: Permissions restored", 'success');
+            $this->log("All directories set to 755", 'success');
+            $this->log("All files set to 644", 'success');
+            $this->log(str_repeat("=", 80) . "\n", 'info');
+            return true;
+        } else {
+            $this->log("\n❌ FAILED: Could not restore permissions", 'error');
+            
+            if ($dirReturnCode !== 0 && !empty($dirOutput)) {
+                $this->log("Directory permission errors:", 'error');
+                foreach ($dirOutput as $line) {
+                    $this->log("  " . $line, 'error');
+                }
+            }
+            
+            if ($fileReturnCode !== 0 && !empty($fileOutput)) {
+                $this->log("File permission errors:", 'error');
+                foreach ($fileOutput as $line) {
+                    $this->log("  " . $line, 'error');
+                }
+            }
+            
+            $this->log("\nNote: This command requires sufficient permissions (may need sudo)", 'warning');
+            $this->log(str_repeat("=", 80) . "\n", 'info');
+            return false;
+        }
+    }
+    
+    /**
+     * Check if path is under /home/xxx/ directory
+     */
+    private function isUnderHomePath($path) {
+        $realPath = realpath($path);
+        if ($realPath === false) {
+            return false;
+        }
+        
+        // Check if path starts with /home/ and has at least one subdirectory
+        return preg_match('#^/home/[^/]+/#', $realPath) === 1;
+    }
+    
+    /**
+     * Extract username from /home/xxx/ path
+     */
+    private function extractUsernameFromPath($path) {
+        $realPath = realpath($path);
+        if ($realPath === false) {
+            return null;
+        }
+        
+        // Extract username from /home/username/...
+        if (preg_match('#^/home/([^/]+)/#', $realPath, $matches)) {
+            return $matches[1];
+        }
+        
+        return null;
+    }
+    
+    /**
+     * Check if a system user exists
+     */
+    private function userExists($username) {
+        // Try to get user information
+        $result = posix_getpwnam($username);
+        return $result !== false;
+    }
+    
+    /**
      * Update cache with disabled items information
      */
     private function updateCacheWithDisabledItems($installation, $disabledItems, $cacheFile) {
@@ -2555,6 +2741,12 @@ Usage:
   # Restore disabled items
   php scan.php --restore-disabled --website example.com
   
+  # Restore ownership (for /home/xxx/ paths only)
+  php scan.php --restore-ownership --website example.com
+  
+  # Restore permissions (for /home/xxx/ paths only)
+  php scan.php --restore-permissions --website example.com
+  
   # Force reinstall even if versions match
   php scan.php --reinstall-plugins --website example.com --force
   
@@ -2583,6 +2775,8 @@ Options:
   --disable-premium-themes-all  Disable premium themes for all websites
   --disable-all-premium-all     Disable all premium items for all websites
   --restore-disabled            Restore disabled items for specific website
+  --restore-ownership           Restore ownership to user from /home/xxx/ path
+  --restore-permissions         Restore permissions (755 for dirs, 644 for files)
   --report <file>               JSON report file to use for operations
   --cached <file>               Cache file path (default: cached.json)
   --website <domain>            Website domain or identifier
@@ -2647,6 +2841,12 @@ Examples:
   # Restore disabled items
   php scan.php --restore-disabled --website example.com
   
+  # Restore ownership for /home/forge/website.com
+  php scan.php --restore-ownership --website example.com
+  
+  # Restore permissions for /home/forge/website.com
+  php scan.php --restore-permissions --website example.com
+  
   # Reinstall specific plugin
   php scan.php --reinstall-plugin jetpack --website example.com
 
@@ -2659,6 +2859,9 @@ Notes:
   - Fix actions require --website to target specific installation
   - Disabled items are tracked in cached.json and can be restored later
   - Disabling renames directories with .disabled suffix to prevent loading
+  - --restore-ownership only works for websites under /home/xxx/ paths
+  - --restore-permissions only works for websites under /home/xxx/ paths
+  - These commands may require sudo/root privileges to execute successfully
 
 HELP;
     }
@@ -2942,6 +3145,32 @@ switch ($options['mode']) {
         }
         
         $scanner->restoreDisabled(
+            $options['website'], 
+            $options['cached']
+        );
+        break;
+        
+    case 'restore-ownership':
+        if (!$options['website']) {
+            echo "Error: --website is required for restore-ownership mode\n";
+            $scanner->displayHelp();
+            exit(1);
+        }
+        
+        $scanner->restoreOwnership(
+            $options['website'], 
+            $options['cached']
+        );
+        break;
+        
+    case 'restore-permissions':
+        if (!$options['website']) {
+            echo "Error: --website is required for restore-permissions mode\n";
+            $scanner->displayHelp();
+            exit(1);
+        }
+        
+        $scanner->restorePermissions(
             $options['website'], 
             $options['cached']
         );
