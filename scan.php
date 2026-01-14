@@ -416,6 +416,144 @@ class WordPressMalwareScanner {
     }
     
     /**
+     * Apply fix to all websites detected in scan report (bulk operation)
+     */
+    public function applyFixToAllWebsites($action, $severity, $reportFile = 'scan_report.json', $cacheFile = 'cached.json', $noBackup = false) {
+        // Validate inputs
+        if (!in_array($action, ['delete', 'quarantine', 'comment'])) {
+            $this->log("Error: Invalid action '$action'", 'error');
+            return false;
+        }
+        
+        if (!in_array($severity, ['high', 'medium', 'low'])) {
+            $this->log("Error: Invalid severity '$severity'", 'error');
+            return false;
+        }
+        
+        // Load report
+        if (!file_exists($reportFile)) {
+            $this->log("❌ Error: Report file not found: {$reportFile}", 'error');
+            $this->log("Run scan first: php scan.php --dry --path /path/to/scan", 'info');
+            return false;
+        }
+        
+        $report = json_decode(file_get_contents($reportFile), true);
+        
+        if (!$report || empty($report['installations'])) {
+            $this->log("No installations found in report.", 'warning');
+            return false;
+        }
+        
+        $installations = $report['installations'];
+        $totalWebsites = count($installations);
+        
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Bulk Fix Operation ===", 'success');
+        $this->log("Action: $action", 'info');
+        $this->log("Severity: $severity", 'info');
+        $this->log("Report: $reportFile", 'info');
+        $this->log("Total installations: {$totalWebsites}", 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        $startTime = microtime(true);
+        $successCount = 0;
+        $skippedCount = 0;
+        $failureCount = 0;
+        $totalFilesAffected = 0;
+        
+        foreach ($installations as $index => $installation) {
+            $num = $index + 1;
+            $wpPath = $installation['path'];
+            
+            // Try to find installation info from cache (for domain name)
+            $cache = $this->loadCache($cacheFile);
+            $domain = null;
+            
+            if ($cache) {
+                foreach ($cache['installations'] as $cachedInst) {
+                    if ($cachedInst['path'] === $wpPath) {
+                        $domain = $cachedInst['domain'];
+                        break;
+                    }
+                }
+            }
+            
+            // Fallback to path if domain not found
+            if (!$domain) {
+                $domain = basename($wpPath);
+            }
+            
+            $this->log("\n[{$num}/{$totalWebsites}] Processing: {$domain}", 'info');
+            $this->log(str_repeat("-", 60), 'info');
+            
+            // Get infected files for this installation
+            $infectedFiles = $installation['infected_files'] ?? [];
+            
+            if (empty($infectedFiles)) {
+                $this->log("  ⏭️  SKIPPED - No infected files found", 'info');
+                $skippedCount++;
+                continue;
+            }
+            
+            // Filter by severity
+            $filesToProcess = $this->filterBySeverity($infectedFiles, $severity);
+            
+            if (empty($filesToProcess)) {
+                $this->log("  ⏭️  SKIPPED - No files with '$severity' severity", 'info');
+                $skippedCount++;
+                continue;
+            }
+            
+            $this->log("  Files to process: " . count($filesToProcess), 'info');
+            
+            // Create minimal installation object for compatibility
+            $installationObj = [
+                'path' => $wpPath,
+                'domain' => $domain,
+            ];
+            
+            // Execute action
+            $result = false;
+            switch ($action) {
+                case 'delete':
+                    $result = $this->deleteFiles($filesToProcess, $wpPath, $noBackup);
+                    break;
+                case 'quarantine':
+                    $result = $this->quarantineFiles($filesToProcess, $wpPath, $installationObj, $cacheFile);
+                    break;
+                case 'comment':
+                    $result = $this->commentFiles($filesToProcess, $wpPath);
+                    break;
+            }
+            
+            if ($result) {
+                $successCount++;
+                $totalFilesAffected += count($filesToProcess);
+            } else {
+                $failureCount++;
+            }
+        }
+        
+        $duration = round(microtime(true) - $startTime);
+        $minutes = floor($duration / 60);
+        $seconds = $duration % 60;
+        $timeStr = $minutes > 0 ? "{$minutes}m {$seconds}s" : "{$seconds}s";
+        
+        // Display summary
+        $this->log("\n" . str_repeat("=", 80), 'info');
+        $this->log("=== Bulk Fix Summary ===", 'success');
+        $this->log(str_repeat("=", 80), 'info');
+        $this->log("✅ Successfully processed: {$successCount} website(s)", 'success');
+        $this->log("⏭️  Skipped (no infected files): {$skippedCount} website(s)", 'info');
+        $this->log("❌ Failed: {$failureCount} website(s)", $failureCount > 0 ? 'error' : 'info');
+        $this->log("📝 Total files affected: {$totalFilesAffected}", 'info');
+        $this->log("⏱️  Total time: {$timeStr}", 'info');
+        $this->log(str_repeat("=", 80) . "\n", 'info');
+        
+        return $failureCount === 0;
+    }
+    
+    /**
      * Filter files by severity level
      */
     private function filterBySeverity($files, $severity) {
@@ -3115,7 +3253,7 @@ Options:
   --only-infected               Only reinstall infected plugins/themes (requires --report)
   --no-backup                   Skip creating backups before operations
 
-Fix Actions (requires --website):
+Fix Actions:
   Delete actions (permanently removes files with backup):
     --delete-high-severity      Delete files with high severity vulnerabilities
     --delete-medium-severity    Delete files with medium severity vulnerabilities
@@ -3130,6 +3268,10 @@ Fix Actions (requires --website):
     --comment-high-severity       Comment out code with high severity vulnerabilities
     --comment-medium-severity     Comment out code with medium severity vulnerabilities
     --comment-low-severity        Comment out code with low severity vulnerabilities
+  
+  Note: --website parameter is optional for fix actions.
+        Without --website: applies fix to ALL websites in the report (bulk mode)
+        With --website: applies fix to specific website only
 
 Examples:
   # Step 1: Detect WordPress installations
@@ -3141,14 +3283,20 @@ Examples:
   # Step 2: Scan for malware
   php scan.php --dry --path /var/www
   
-  # Step 3a: Fix high severity issues by deleting files
+  # Step 3a: Fix high severity issues for specific website
   php scan.php --delete-high-severity --website example.com
   
-  # Step 3b: Quarantine medium severity files for review
+  # Step 3b: Fix high severity issues for ALL websites (bulk mode)
+  php scan.php --delete-high-severity
+  
+  # Step 3c: Quarantine medium severity files for specific website
   php scan.php --quarantine-medium-severity --website example.com
   
-  # Step 3c: Comment out low severity code
-  php scan.php --comment-low-severity --website example.com
+  # Step 3d: Quarantine medium severity files for ALL websites (bulk mode)
+  php scan.php --quarantine-medium-severity --report scan_report.json
+  
+  # Step 3e: Comment out low severity code for ALL websites (bulk mode)
+  php scan.php --comment-low-severity --no-backup
   
   # Step 4a: Reinstall infected WordPress core
   php scan.php --reinstall-core --website example.com
@@ -3275,20 +3423,26 @@ switch ($options['mode']) {
         break;
         
     case 'fix':
-        if (!$options['website']) {
-            echo "Error: --website is required for fix operations\n";
-            $scanner->displayHelp();
-            exit(1);
+        if ($options['website']) {
+            // Single website mode (existing behavior)
+            $scanner->applyFix(
+                $options['website'],
+                $options['action'],
+                $options['severity'],
+                $options['report'],
+                $options['cached'],
+                $options['no_backup'] ?? false
+            );
+        } else {
+            // Bulk mode for all websites
+            $scanner->applyFixToAllWebsites(
+                $options['action'],
+                $options['severity'],
+                $options['report'],
+                $options['cached'],
+                $options['no_backup'] ?? false
+            );
         }
-        
-        $scanner->applyFix(
-            $options['website'],
-            $options['action'],
-            $options['severity'],
-            $options['report'],
-            $options['cached'],
-            $options['no_backup'] ?? false
-        );
         break;
         
     case 'reinstall':
