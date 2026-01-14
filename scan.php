@@ -2898,6 +2898,13 @@ class WordPressMalwareScanner {
             return null;
         }
         
+        $fileName = basename($filePath);
+        $fileExt = strtolower(pathinfo($fileName, PATHINFO_EXTENSION));
+        
+        // Skip binary content check for legitimate binary file types
+        $safeBinaryExtensions = ['po', 'mo', 'pot', 'json', 'xml', 'svg', 'ttf', 'woff', 'woff2', 'eot'];
+        $skipBinaryCheck = in_array($fileExt, $safeBinaryExtensions);
+        
         $content = @file_get_contents($filePath, false, null, 0, 8192); // Read first 8KB
         
         if ($content === false) {
@@ -2905,7 +2912,6 @@ class WordPressMalwareScanner {
         }
         
         $vulnerabilities = [];
-        $fileName = basename($filePath);
         $isHiddenFile = !empty($fileName) && $fileName[0] === '.';
         
         // Check for PHP code in non-PHP files
@@ -2935,15 +2941,18 @@ class WordPressMalwareScanner {
         }
         
         // Check for binary/obfuscated content (non-printable characters mixed with code)
-        $nonPrintableCount = preg_match_all('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\xFF]/', $content, $matches);
-        if ($nonPrintableCount > 10) {
-            // Check if there's also some readable code-like content
-            if (preg_match('/(\$|function|class|eval|base64|exec)/i', $content)) {
-                $vulnerabilities[] = [
-                    'type' => 'obfuscation',
-                    'pattern' => 'binary_content_in_file',
-                    'severity' => 'high',
-                ];
+        // Skip this check for legitimate binary file types
+        if (!$skipBinaryCheck) {
+            $nonPrintableCount = preg_match_all('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\xFF]/', $content, $matches);
+            if ($nonPrintableCount > 10) {
+                // Check if there's also some readable code-like content
+                if (preg_match('/(\$|function|class|eval|base64|exec)/i', $content)) {
+                    $vulnerabilities[] = [
+                        'type' => 'obfuscation',
+                        'pattern' => 'binary_content_in_file',
+                        'severity' => 'low',
+                    ];
+                }
             }
         }
         
